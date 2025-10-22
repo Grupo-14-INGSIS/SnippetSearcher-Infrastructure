@@ -1,0 +1,37 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  start:
+    runs-on: GitHub
+    steps:
+      - name: init
+        run: echo "Hi!"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@v4
+      - name: Build and test all microservices
+        run: |
+          echo "Aquí podrías clonar los repos de los microservicios"
+          echo "y ejecutar los builds/test según corresponda."
+      - name: Publish images
+        run: |
+          echo "Aquí podrías hacer docker build y docker push a GHCR"
+  
+  deploy:
+    runs-on: self-hosted
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Pull latest images
+        run: docker compose pull
+      - name: Restart containers
+        run: docker compose up -d --remove-orphans
