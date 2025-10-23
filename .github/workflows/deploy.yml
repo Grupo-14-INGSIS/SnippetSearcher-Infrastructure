@@ -6,11 +6,17 @@ on:
       - main
 
 jobs:
-  start:
+  GitHubGreet:
     runs-on: ubuntu-latest
     steps:
-      - name: init
+      - name: Greet
         run: echo "Hi!"
+
+  VMgreet:
+  runs-on: self-hosted
+  steps:
+    - name: greet
+      run: echo "Hello!"
 
 #  build:
 #    runs-on: ubuntu-latest
