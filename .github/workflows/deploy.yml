@@ -13,10 +13,10 @@ jobs:
         run: echo "Hi!"
 
   VMgreet:
-  runs-on: self-hosted
-  steps:
-    - name: greet
-      run: echo "Hello!"
+    runs-on: self-hosted
+    steps:
+      - name: greet
+        run: echo "Hello!"
 
 #  build:
 #    runs-on: ubuntu-latest
