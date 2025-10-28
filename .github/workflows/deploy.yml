@@ -6,38 +6,60 @@ on:
       - main
 
 jobs:
-  GitHubGreet:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Greet
-        run: echo "Hi!"
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Build and test all microservices
+        run: |
+          echo "Cloning SnippetSearcher-App"
+          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-App.git
+          echo "Cloning SnippetSearcher-AccessManager"
+          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-AccessManager.git
+          echo "Cloning SnippetSearcher-Runner"
+          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-Runner.git
+          echo "Task done"
+      - name: Publish images
+        run: |
+          echo "Creating SnippetSearcher-App image"
+          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest ./SnippetSearcher-App
+          echo "publishing SnippetSearcher-App image to GitHub Container Registry"
+          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
+          echo "-----"
+          echo "Creating SnippetSearcher-AccessManager image"
+          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest ./SnippetSearcher-AccessManager
+          echo "publishing SnippetSearcher-AccessManager image to GitHub Container Registry"
+          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+          echo "-----"
+          echo "Creating SnippetSearcher-Runner image"
+          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest ./SnippetSearcher-Runner
+          echo "publishing SnippetSearcher-Runner image to GitHub Container Registry"
+          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
+          echo "Task done"
 
-  VMgreet:
+  deploy:
     runs-on: self-hosted
+    needs: build
     steps:
-      - name: greet
-        run: echo "Hello!"
-
-#  build:
-#    runs-on: ubuntu-latest
-#   steps:
-#     - name: Checkout infrastructure repository
-#        uses: actions/checkout@v4
-#      - name: Build and test all microservices
-#        run: |
-#          echo "Aquí podrías clonar los repos de los microservicios"
-#          echo "y ejecutar los builds/test según corresponda."
-#      - name: Publish images
-#        run: |
-#          echo "Aquí podrías hacer docker build y docker push a GHCR"
-
-#  deploy:
-#    runs-on: self-hosted
-#    needs: build
-#    steps:
-#      - name: Checkout repository
-#        uses: actions/checkout@v4
-#      - name: Pull latest images
-#        run: docker compose pull
-#      - name: Restart containers
-#        run: docker compose up -d --remove-orphans
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Pull latest images
+        run: |
+          echo "Creating containers"
+          docker compose pull
+          echo "Task done"
+      - name: Restart containers
+        run: |
+          echo "Restarting containers"
+          docker compose up -d --remove-orphans
+          echo "Task done"
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --tail=100
+      - name: Verify running containers
+        run: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      - name: Prune old images
+        run: docker image prune -f

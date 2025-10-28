@@ -1,0 +1,9 @@
+services:
+  app:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
+    ports:
+      - "8080:8080"
+  access:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+  runner:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
