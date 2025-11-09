@@ -1,9 +1,13 @@
 services:
-  app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
+  snippetsearcher-app:
+    image: ingsisgroup14images.azurecr.io/snippetsearcher-app:latest
     ports:
       - "8080:8080"
-  access:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-  runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
+  snippetsearcher-accessmanager:
+    image: ingsisgroup14images.azurecr.io/snippetsearcher-accessmanager:latest
+  snippetsearcher-runner:
+    image: ingsisgroup14images.azurecr.io/snippetsearcher-runner:latest
+  snippet-asset-service:
+    image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
+    ports:
+      - "8082:8080"

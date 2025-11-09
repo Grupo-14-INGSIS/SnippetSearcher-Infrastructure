@@ -10,24 +10,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Log-in to Azure Container Registry service
         run: |
           echo "Logging in to ACR: ${{ secrets.ACR_LOGIN_SERVER }}"
           echo "${{ secrets.AZURE_CLIENT_SECRET }}" | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.AZURE_CLIENT_ID }} --password-stdin
+      
       - name: Get service from payload
         id: payload
         run: |
           SERVICE_NAME="${{ github.event.client_payload.service }}"
           echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
           echo "Received request to deploy service: $SERVICE_NAME"
+
       - name: Pull image for ${{ steps.payload.outputs.service_name }}
         run: docker compose pull ${{ steps.payload.outputs.service_name }}
+
       - name: Restart container for ${{ steps.payload.outputs.service_name }}
         run: docker compose up -d --no-deps ${{ steps.payload.outputs.service_name }}
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --tail=100
+
       - name: Verify running containers
         run: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        
       - name: Prune old images
         run: docker image prune -f
