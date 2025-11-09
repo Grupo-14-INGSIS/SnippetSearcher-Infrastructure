@@ -1,61 +1,29 @@
 name: Build & Deploy
 
 on:
-  push:
-    branches:
-      - main
+repository_dispatch:
+  types: [new-image-ready]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout infrastructure repository
-        uses: actions/checkout@v4
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-      - name: Build and test all microservices
-        run: |
-          echo "Cloning SnippetSearcher-App"
-          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-App.git
-          echo "Cloning SnippetSearcher-AccessManager"
-          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-AccessManager.git
-          echo "Cloning SnippetSearcher-Runner"
-          git clone https://github.com/Grupo-14-INGSIS/SnippetSearcher-Runner.git
-          echo "Task done"
-      - name: Publish images
-        run: |
-          echo "Creating SnippetSearcher-App image"
-          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest ./SnippetSearcher-App
-          echo "publishing SnippetSearcher-App image to GitHub Container Registry"
-          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
-          echo "-----"
-          echo "Creating SnippetSearcher-AccessManager image"
-          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest ./SnippetSearcher-AccessManager
-          echo "publishing SnippetSearcher-AccessManager image to GitHub Container Registry"
-          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-          echo "-----"
-          echo "Creating SnippetSearcher-Runner image"
-          docker build -t ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest ./SnippetSearcher-Runner
-          echo "publishing SnippetSearcher-Runner image to GitHub Container Registry"
-          docker push ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
-          echo "Task done"
-
-  deploy:
+  update:
     runs-on: self-hosted
-    needs: build
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Pull latest images
+      - name: Log-in to Azure Container Registry service
         run: |
-          echo "Creating containers"
-          docker compose pull
-          echo "Task done"
-      - name: Restart containers
+          echo "Logging in to ACR: ${{ secrets.ACR_LOGIN_SERVER }}"
+          echo "${{ secrets.AZURE_CLIENT_SECRET }}" | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.AZURE_CLIENT_ID }} --password-stdin
+      - name: Get service from payload
+        id: payload
         run: |
-          echo "Restarting containers"
-          docker compose up -d --remove-orphans
-          echo "Task done"
+          SERVICE_NAME="${{ github.event.client_payload.service }}"
+          echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+          echo "Received request to deploy service: $SERVICE_NAME"
+      - name: Pull image for ${{ steps.payload.outputs.service_name }}
+        run: docker compose pull ${{ steps.payload.outputs.service_name }}
+      - name: Restart container for ${{ steps.payload.outputs.service_name }}
+        run: docker compose up -d --no-deps ${{ steps.payload.outputs.service_name }}
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --tail=100
