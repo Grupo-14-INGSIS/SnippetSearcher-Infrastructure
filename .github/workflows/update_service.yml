@@ -1,8 +1,8 @@
 name: Build & Deploy
 
 on:
-repository_dispatch:
-  types: [new-image-ready]
+  repository_dispatch:
+    types: [new-image-ready]
 
 jobs:
   update:
