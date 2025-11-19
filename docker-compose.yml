@@ -1,13 +1,58 @@
 services:
   snippetsearcher-app:
-    image: ingsisgroup14images.azurecr.io/snippetsearcher-app:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
+    container_name: app
     ports:
-      - "8080:8080"
-  snippetsearcher-accessmanager:
-    image: ingsisgroup14images.azurecr.io/snippetsearcher-accessmanager:latest
+      - "8081:8080"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ACCESS_MANAGER_HOST=accessmanager
+      - ACCESS_MANAGER_PORT=8080
+    depends_on:
+      - redis
+      - accessmanager
+
   snippetsearcher-runner:
-    image: ingsisgroup14images.azurecr.io/snippetsearcher-runner:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
+    container_name: runner
+    ports: 
+      - "8082:8080"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - APP_HOST=app
+      - APP_PORT=8080
+      - BUCKET_SERVICE=bucket
+      - BUCKET_PORT=8080
+    depends_on:
+      - redis
+      - bucket
+      - app
+
+  snippetsearcher-accessmanager:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+    container_name: accessmanager
+    ports:
+      - "8083:8080"
+
   snippet-asset-service:
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
+    container_name: bucket
     ports:
-      - "8082:8080"
+      - "8084:8080"
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+
+networks:
+  default:
+    name: snippetsearcher-network
