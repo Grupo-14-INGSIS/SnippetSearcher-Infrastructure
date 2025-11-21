@@ -42,6 +42,12 @@ services:
     ports:
       - "8084:8080"
 
+  snippetsearcher-ui:
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
+    container_name: bucket
+    ports:
+      - "8085:8080"
+
   redis:
     image: redis:7
     container_name: redis
