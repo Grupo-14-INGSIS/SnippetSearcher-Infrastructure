@@ -1,64 +1,137 @@
 services:
   snippetsearcher-app:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
-    container_name: app
     ports:
       - "8081:8080"
     environment:
+      - DB_HOST=app-db
+      - DB_PORT=5432
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=app
+      - POSTGRES_DB=snippet-db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - ACCESS_MANAGER_HOST=accessmanager
+      - ACCESS_MANAGER_HOST=snippetsearcher-accessmanager
       - ACCESS_MANAGER_PORT=8080
     depends_on:
+      - app-db
       - redis
-      - accessmanager
+      - snippetsearcher-accessmanager
+    networks:
+      - reverse-proxy-network
+
+  app-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: snippet-db
+    volumes:
+      - app-pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    networks:
+      - reverse-proxy-network
 
   snippetsearcher-runner:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
-    container_name: runner
     ports: 
       - "8082:8080"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - APP_HOST=app
+      - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
-      - BUCKET_SERVICE=bucket
+      - BUCKET_SERVICE=snippet-asset-service
       - BUCKET_PORT=8080
+      - DB_HOST=runner-db
+      - DB_PORT=5432
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=app
+      - POSTGRES_DB=snippet-db
     depends_on:
+      - runner-db
       - redis
-      - bucket
-      - app
+      - snippet-asset-service
+      - snippetsearcher-app
+    networks:
+      - reverse-proxy-network
+
+  runner-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: snippet-db
+    volumes:
+      - runner-pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    networks:
+      - reverse-proxy-network
 
   snippetsearcher-accessmanager:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-    container_name: accessmanager
     ports:
       - "8083:8080"
+    environment:
+      - DB_HOST=accessmanager-db
+      - DB_PORT=5432
+      - POSTGRES_USER=access_manager
+      - POSTGRES_PASSWORD=access_manager
+      - POSTGRES_DB=compose-db
+    depends_on:
+      - accessmanager-db
+    networks:
+      - reverse-proxy-network
+
+  accessmanager-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: access_manager
+      POSTGRES_PASSWORD: access_manager
+      POSTGRES_DB: compose-db
+    volumes:
+      - accessmanager-pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    networks:
+      - reverse-proxy-network
 
   snippet-asset-service:
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
-    container_name: bucket
     ports:
       - "8084:8080"
+    networks:
+      - reverse-proxy-network
 
   snippetsearcher-ui:
     image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
-    container_name: bucket
     ports:
       - "8085:8080"
+    environment:
+      - APP_HOST=snippetsearcher-app
+      - APP_PORT=8080
+      - RUNNER_SERVICE=snippetsearcher-runner
+      - RUNNER_PORT=8080
+    depends_on:
+      - snippetsearcher-app
+      - snippetsearcher-runner
+    networks:
+      - reverse-proxy-network
 
   redis:
     image: redis:7
-    container_name: redis
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    networks:
+      - reverse-proxy-network
 
 volumes:
+  app-pgdata:
+  accessmanager-pgdata:
+  runner-pgdata:
   redis-data:
 
 networks:
   default:
-    name: snippetsearcher-network
+    name: reverse-proxy-network
