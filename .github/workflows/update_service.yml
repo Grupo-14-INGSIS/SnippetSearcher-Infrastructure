@@ -10,7 +10,7 @@ on:
 
 jobs:
   update:
-    runs-on: self-hosted
+    runs-on: self-hosted #ya puede funcionar tanto para el actions-runner de dev así como para el de prod
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
