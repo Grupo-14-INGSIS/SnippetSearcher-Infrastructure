@@ -1,0 +1,18 @@
+version: '3.8'
+services :
+  nginx:
+    image: nginx:alpine
+    container_name: reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes :
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/nginx. conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt :/etc/letsencrypt :ro
+    networks :
+      - reverse-proxy-network
+networks :
+  reverse-proxy-network:
+    external: true
