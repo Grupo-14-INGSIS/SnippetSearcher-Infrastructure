@@ -65,36 +65,6 @@ services:
     networks:
       - reverse-proxy-network
 
-# AccessManager
-  snippetsearcher-accessmanager:
-    container_name: "snippetsearcher-accessmanager"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-    ports:
-      - "8083:8080"
-    environment:
-      DB_USER: access_manager
-      DB_PASSWORD: access_manager
-      DB_NAME: compose-db
-      DB_HOST: accessmanager-db
-      DB_PORT: 5432
-    depends_on:
-      - accessmanager-db
-    networks:
-      - reverse-proxy-network
-
-  accessmanager-db:
-    container_name: "accessmanager-db"
-    image: postgres:16
-    environment:
-      POSTGRES_USER: access_manager
-      POSTGRES_PASSWORD: access_manager
-      POSTGRES_DB: compose-db
-    volumes:
-      - accessmanager-pgdata:/var/lib/postgresql/data
-      - ./db/accessmanager-init:/docker-entrypoint-initdb.d
-    networks:
-      - reverse-proxy-network
-
 # Runner
   snippetsearcher-runner:
     container_name: "snippetsearcher-runner"
@@ -151,6 +121,36 @@ services:
       - "10000:10000"
       - "10001:10001"
       - "10002:10002"
+    networks:
+      - reverse-proxy-network
+
+  # AccessManager
+  snippetsearcher-accessmanager:
+    container_name: "snippetsearcher-accessmanager"
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+    ports:
+      - "8083:8080"
+    environment:
+      DB_USER: access_manager
+      DB_PASSWORD: access_manager
+      DB_NAME: compose-db
+      DB_HOST: accessmanager-db
+      DB_PORT: 5432
+    depends_on:
+      - accessmanager-db
+    networks:
+      - reverse-proxy-network
+
+  accessmanager-db:
+    container_name: "accessmanager-db"
+    image: postgres:16
+    environment:
+      POSTGRES_USER: access_manager
+      POSTGRES_PASSWORD: access_manager
+      POSTGRES_DB: compose-db
+    volumes:
+      - accessmanager-pgdata:/var/lib/postgresql/data
+      - ./db/accessmanager-init:/docker-entrypoint-initdb.d
     networks:
       - reverse-proxy-network
 
