@@ -1,8 +1,6 @@
 services:
   snippetsearcher-app:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
-    ports:
-      - "8081:8080"
     environment:
       - DB_HOST=app-db
       - DB_PORT=5432
@@ -34,8 +32,6 @@ services:
 
   snippetsearcher-runner:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
-    ports: 
-      - "8082:8080"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -70,8 +66,6 @@ services:
 
   snippetsearcher-accessmanager:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-    ports:
-      - "8083:8080"
     environment:
       - DB_HOST=accessmanager-db
       - DB_PORT=5432
@@ -97,15 +91,11 @@ services:
 
   snippet-asset-service:
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
-    ports:
-      - "8084:8080"
     networks:
       - reverse-proxy-network
 
   snippetsearcher-ui:
     image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
-    ports:
-      - "8085:8080"
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
@@ -125,6 +115,15 @@ services:
       - redis-data:/data
     networks:
       - reverse-proxy-network
+
+  proxy:
+    container_name: "reverse-proxy"
+    image: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./static/:/usr/share/nginx/html:ro
+      - ./conf.d:/etc/nginx/conf.d:ro
 
 volumes:
   app-pgdata:
