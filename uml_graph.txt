@@ -1,0 +1,27 @@
+@startuml
+together {
+agent App
+agent Runner
+}
+agent AccessManager
+database rules
+database snippetStatus
+database permissions
+
+cloud Auth0
+agent UI
+agent "redis-streams"
+agent "asset-service"
+
+UI -up-> Auth0
+UI -down-> App
+UI -down-> Runner
+App -down-> AccessManager
+AccessManager -down-> permissions
+App -down-> "redis-streams"
+App -right-> snippetStatus
+Runner <-down- "redis-streams"
+Runner <-right-> App
+Runner -down-> "asset-service"
+Runner -left-> rules
+@enduml
