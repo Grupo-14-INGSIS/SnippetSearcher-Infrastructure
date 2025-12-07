@@ -17,7 +17,7 @@ services:
       - snippetsearcher-ui
 
   snippetsearcher-ui:
-    build: ghcr.io/grupo-14-ingsis/printscript-ui:latest  # o image: tu-imagen:tag
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:latest  # o image: tu-imagen:tag
     container_name: snippetsearcher-ui
     restart: unless-stopped
     ports:
