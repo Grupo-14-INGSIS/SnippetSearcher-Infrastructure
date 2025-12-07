@@ -13,8 +13,6 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - reverse-proxy-network
-    depends_on:
-      - snippetsearcher-ui
 
 networks:
   reverse-proxy-network:
