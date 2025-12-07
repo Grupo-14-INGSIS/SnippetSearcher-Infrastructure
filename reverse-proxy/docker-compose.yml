@@ -16,15 +16,6 @@ services:
     depends_on:
       - snippetsearcher-ui
 
-  snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:latest  # o image: tu-imagen:tag
-    container_name: snippetsearcher-ui
-    restart: unless-stopped
-    ports:
-      - "8080:80"  # o el puerto que use tu contenedor
-    networks:
-      - reverse-proxy-network
-
 networks:
   reverse-proxy-network:
     external: true
