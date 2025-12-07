@@ -6,10 +6,9 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - DOMAIN_NAME=${DOMAIN_NAME}  # <-- AGREGAR ESTO (lee del .env de la VM)
+      - DOMAIN_NAME=${DOMAIN_NAME}
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./app.conf:/etc/nginx/templates/app.conf.template:ro  # <-- Cambiar a template
+      - ./app.conf:/etc/nginx/templates/app.conf.template:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - reverse-proxy-network
