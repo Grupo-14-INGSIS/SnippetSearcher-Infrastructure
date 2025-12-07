@@ -1,8 +1,8 @@
-# App: 8081
-# Runner: 8082
-# AccessManager: 8083
-# Asset-Service: 8084
-# UI: 8085
+# App: 19081
+# Runner: 19082
+# AccessManager: 19083
+# Asset-Service: 19084
+# UI: 19085
 # Redis: 6379
 
 # App
@@ -11,7 +11,7 @@ services:
     container_name: "snippetsearcher-app"
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
     ports:
-      - "8081:8080"
+      - "19081:8080"
     environment:
       JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       DB_USER: app
@@ -70,7 +70,7 @@ services:
     container_name: "snippetsearcher-runner"
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
     ports:
-      - "8082:8080"
+      - "19082:8080"
     environment:
       DB_USER: app
       DB_PASSWORD: app
@@ -106,7 +106,7 @@ services:
     container_name: "asset-service"
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
     ports:
-      - "8084:8080"
+      - "19084:8080"
     environment:
       AZURE_HOST: http://azurite
     depends_on:
@@ -129,7 +129,7 @@ services:
     container_name: "snippetsearcher-accessmanager"
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
     ports:
-      - "8083:8080"
+      - "19083:8080"
     environment:
       DB_USER: access_manager
       DB_PASSWORD: access_manager
@@ -158,7 +158,7 @@ services:
   snippetsearcher-ui:
     image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
     ports:
-      - "8085:8080"
+      - "19085:8080"
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
