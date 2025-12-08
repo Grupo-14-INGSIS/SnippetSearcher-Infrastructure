@@ -8,7 +8,7 @@ services:
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
     volumes:
-      - ./app.conf:/etc/nginx/templates/app.conf.template:ro
+      - ./app.conf:/etc/nginx/templates/app.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - reverse-proxy-network
