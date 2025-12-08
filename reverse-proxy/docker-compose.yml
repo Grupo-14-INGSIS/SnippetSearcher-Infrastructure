@@ -8,11 +8,11 @@ services:
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
     volumes:
-      - ./app.conf:/etc/nginx/templates/app.conf:ro
+      - ./nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro  # <-- CAMBIO AQUÍ
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - reverse-proxy-network
-    command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
+    command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
 
 networks:
   reverse-proxy-network:
