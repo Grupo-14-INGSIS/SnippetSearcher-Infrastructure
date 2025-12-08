@@ -156,6 +156,7 @@ services:
 
 # UI
   snippetsearcher-ui:
+    container_name: "snippetsearcher-ui"
     image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
     ports:
       - "19085:8080"
