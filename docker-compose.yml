@@ -172,7 +172,6 @@ services:
       - VITE_AUTH0_REALM=Username-Password-Authentication
 
     depends_on:
-      - snippetsearcher-app
       - snippetsearcher-runner
     networks:
       - reverse-proxy-network
