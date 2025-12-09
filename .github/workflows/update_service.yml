@@ -41,10 +41,10 @@ jobs:
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
 
             echo "--- Pulling new image for ${{ steps.payload.outputs.service_name }} ---"
-            docker compose pull ${{ steps.payload.outputs.service_name }}
+            docker compose pull ${{ steps.payload.outputs.service_name }}:${{ steps.payload.outputs.environment }}
 
             echo "--- Restarting container for ${{ steps.payload.outputs.service_name }} ---"
-            docker compose up -d --no-deps ${{ steps.payload.outputs.service_name }}
+            docker compose up -d --no-deps ${{ steps.payload.outputs.service_name }}:${{ steps.payload.outputs.environment }}
             
             echo "--- Pruning old images ---"
             docker image prune -f
