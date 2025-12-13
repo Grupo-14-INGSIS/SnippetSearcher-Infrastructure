@@ -68,7 +68,7 @@ services:
 # Runner
   snippetsearcher-runner:
     container_name: "snippetsearcher-runner"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
     ports:
       - "19082:8080"
     environment:
