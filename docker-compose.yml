@@ -32,6 +32,8 @@ services:
         condition: service_healthy
       snippetsearcher-accessmanager:
         condition: service_started
+      snippetsearcher-runner:
+        condition: service_started
     networks:
       - reverse-proxy-network
 
