@@ -33,7 +33,7 @@ services:
       snippetsearcher-accessmanager:
         condition: service_started
       snippetsearcher-runner:
-        condition: service_started
+        condition: service_healthy
     networks:
       - reverse-proxy-network
 
@@ -73,6 +73,11 @@ services:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
     ports:
       - "19082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     environment:
       DB_USER: app
       DB_PASSWORD: app
