@@ -47,7 +47,7 @@ services:
       - app-pgdata:/var/lib/postgresql/data
       - ../SnippetSearcher-App/db/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U app -d appdb" ]
+      test: [ "CMD-SHELL", "psql -U app -d appdb -c 'SELECT 1'" ]
       interval: 5s
       timeout: 5s
       retries: 5
