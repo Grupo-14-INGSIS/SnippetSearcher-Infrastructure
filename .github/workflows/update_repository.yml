@@ -19,14 +19,14 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          USER: ${{ github.repository_owner }}
+          GITHUB_ACTOR: ${{ github.actor }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
           BRANCH: ${{ github.ref_name }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GITHUB_TOKEN,USER,VM_DIRECTORY,BRANCH
+          envs: GITHUB_TOKEN,GITHUB_ACTOR,VM_DIRECTORY,BRANCH
           script: |
             set -e
             
@@ -54,7 +54,7 @@ jobs:
             docker compose down
             
             echo "Logging in to GitHub Container Registry"
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
             
             echo "Pulling latest images"
             docker compose pull
