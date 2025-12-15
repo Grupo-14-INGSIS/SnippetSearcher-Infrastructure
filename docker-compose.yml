@@ -32,6 +32,8 @@ services:
         condition: service_healthy
       snippetsearcher-accessmanager:
         condition: service_started
+      snippetsearcher-runner:
+        condition: service_healthy
     networks:
       - reverse-proxy-network
 
@@ -71,6 +73,11 @@ services:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
     ports:
       - "19082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     environment:
       DB_USER: app
       DB_PASSWORD: app
@@ -166,7 +173,7 @@ services:
 
       - VITE_AUTH0_DOMAIN=dev-65tlgyzfpbzeka8a.us.auth0.com
       - VITE_AUTH0_CLIENT_ID=pDaLfxwVAerUnhjKfJNfxLfduUPJQi3x
-      - VITE_AUTH0_AUDIENCE=api.snippets.com
+      - VITE_AUTH0_AUDIENCE=https://api.snippets.com
       - VITE_AUTH0_REALM=Username-Password-Authentication
 
     depends_on:
