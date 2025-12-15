@@ -2,7 +2,7 @@ name: Build & Deploy
 
 permissions:
   contents: read
-  packages: read
+  packages: write
 
 on:
   repository_dispatch:
@@ -11,40 +11,51 @@ on:
 jobs:
   update:
     name: Deploy to ${{ github.event.client_payload.environment }}
-    # Elige el entorno (y sus secrets) basado en el payload del evento
     environment: ${{ github.event.client_payload.environment }}
     runs-on: ubuntu-latest
     steps:
+
       - name: Get service and environment from payload
         id: payload
         run: |
           SERVICE_NAME="${{ github.event.client_payload.service }}"
           ENV_NAME="${{ github.event.client_payload.environment }}"
+          
+          if [ -z "$SERVICE_NAME" ] || [ -z "$ENV_NAME" ]; then
+            echo "Error: Missing service or environment in payload"
+            exit 1
+          fi
+          
           echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
           echo "environment_name=$ENV_NAME" >> $GITHUB_OUTPUT
           echo "Received request to deploy service: $SERVICE_NAME to environment: $ENV_NAME"
 
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVICE_NAME: ${{ steps.payload.outputs.service }}
+          ENV_NAME: ${{ steps.validate.outputs.environment }}
+          USER: ${{ github.repository_owner }}
+          VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
         with:
-          # Estos secrets ahora vienen del entorno seleccionado
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GITHUB_TOKEN,SERVICE_NAME,ENV_NAME,USER,VM_DIRECTORY
           script: |
-            # Asumimos que esta ruta es la misma en ambas VMs
-            # Si no, necesitaremos otra variable para la ruta.
-            cd /home/azureuser/SnippetSearcher-Infrastructure
+            set -e
             
-            # El resto de los comandos se ejecutan en tu VM
+            cd $VM_DIRECTORY
+            
             echo "--- Logging into GHCR ---"
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
 
-            echo "--- Pulling new image for ${{ steps.payload.outputs.service_name }} ---"
-            docker compose pull ${{ steps.payload.outputs.service_name }}:${{ steps.payload.outputs.environment }}
+            echo "--- Pulling new image for $SERVICE_NAME ---"
+            docker compose pull $SERVICE_NAME
 
-            echo "--- Restarting container for ${{ steps.payload.outputs.service_name }} ---"
-            docker compose up -d --no-deps ${{ steps.payload.outputs.service_name }}:${{ steps.payload.outputs.environment }}
+            echo "--- Restarting container for $SERVICE_NAME ---"
+            docker compose up -d --no-deps --force-recreate $SERVICE_NAME
             
             echo "--- Pruning old images ---"
             docker image prune -f
