@@ -1,0 +1,68 @@
+name: Deploy to VM
+
+permissions:
+  contents: read
+  packages: read
+
+on:
+  push:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VM_SSH_PORT}}
+          script: |
+            set -e
+            
+            echo "Navigating to project directory"
+            cd ${{ secrets.VM_PROJECT_PATH }}
+            
+            echo "Saving current commit"
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            echo "Current commit: $PREVIOUS_COMMIT"
+            
+            echo "Pulling latest changes from repository"
+            git pull
+            
+            echo "Stopping containers"
+            docker compose down
+            
+            echo "Pulling latest images"
+            docker compose pull
+            
+            echo "Starting containers"
+            docker compose up -d --build
+            
+            echo "Waiting for containers to be healthy"
+            sleep 10
+            
+            echo "Checking container health"
+            if docker compose ps | grep -q "unhealthy\|Exited"; then
+              echo "+----------------------------------------------+"
+              echo "| SOME CONTAINERS WERE UNHEALTHY. ROLLING BACK |"
+              echo "+----------------------------------------------+"
+              echo
+              git reset --hard $PREVIOUS_COMMIT
+              docker compose down
+              docker compose up -d --build
+              echo "ROLLBACK COMPLETED"
+              exit 1
+            fi
+            
+            echo "Cleaning up unused images"
+            docker image prune -af
+            
+            echo "Deployment completed successfully"
+            echo
+            echo "Container status:"
+            docker compose ps
