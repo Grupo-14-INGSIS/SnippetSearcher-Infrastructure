@@ -18,7 +18,7 @@ jobs:
       - name: Deploy to VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
           GITHUB_ACTOR: ${{ github.actor }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
           BRANCH: ${{ github.ref_name }}
