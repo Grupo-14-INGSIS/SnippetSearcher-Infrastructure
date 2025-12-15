@@ -45,7 +45,7 @@ services:
       POSTGRES_DB: appdb
     volumes:
       - app-pgdata:/var/lib/postgresql/data
-      - ../SnippetSearcher-App/db/init:/docker-entrypoint-initdb.d
+      - ./db/app-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: [ "CMD-SHELL", "psql -U app -d appdb -c 'SELECT 1'" ]
       interval: 5s
