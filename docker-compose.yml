@@ -164,7 +164,7 @@ services:
 # UI
   snippetsearcher-ui:
     container_name: "snippetsearcher-ui"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-ui:develop
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
