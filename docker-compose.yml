@@ -136,7 +136,7 @@ services:
   # AccessManager
   snippetsearcher-accessmanager:
     container_name: "snippetsearcher-accessmanager"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop
     ports:
       - "19083:8080"
     environment:
