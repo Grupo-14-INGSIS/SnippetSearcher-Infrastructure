@@ -9,7 +9,7 @@
 services:
   snippetsearcher-app:
     container_name: "snippetsearcher-app"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG}
     ports:
       - "19081:8080"
     environment:
@@ -70,7 +70,7 @@ services:
 # Runner
   snippetsearcher-runner:
     container_name: "snippetsearcher-runner"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG}
     ports:
       - "19082:8080"
     healthcheck:
@@ -128,13 +128,15 @@ services:
       - "10000:10000"
       - "10001:10001"
       - "10002:10002"
+    volumes:
+      - azurite-data:/data
     networks:
       - reverse-proxy-network
 
   # AccessManager
   snippetsearcher-accessmanager:
     container_name: "snippetsearcher-accessmanager"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG}
     ports:
       - "19083:8080"
     environment:
@@ -164,7 +166,7 @@ services:
 # UI
   snippetsearcher-ui:
     container_name: "snippetsearcher-ui"
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG}
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
@@ -208,12 +210,12 @@ services:
       asset-service:
         condition: service_started
 
-
 volumes:
   app-pgdata:
   redis-data:
   accessmanager-pgdata:
   runner-pgdata:
+  azurite-data:
 
 networks:
   reverse-proxy-network:
