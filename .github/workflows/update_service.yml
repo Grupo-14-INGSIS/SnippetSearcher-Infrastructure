@@ -33,10 +33,10 @@ jobs:
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SERVICE_NAME: ${{ steps.payload.outputs.service }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
+          USER: ${{ github.GHCR_USER }}
           ENV_NAME: ${{ steps.validate.outputs.environment }}
-          USER: ${{ github.repository_owner }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -48,17 +48,12 @@ jobs:
             
             cd $VM_DIRECTORY
             
-            echo "--- Logging into GHCR ---"
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
 
-            echo "--- Pulling new image for $SERVICE_NAME ---"
             docker compose pull $SERVICE_NAME
 
-            echo "--- Restarting container for $SERVICE_NAME ---"
             docker compose up -d --no-deps --force-recreate $SERVICE_NAME
             
-            echo "--- Pruning old images ---"
             docker image prune -f
             
-            echo "--- Verify running containers ---"
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
