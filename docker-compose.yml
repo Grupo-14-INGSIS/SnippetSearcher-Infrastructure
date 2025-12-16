@@ -128,6 +128,8 @@ services:
       - "10000:10000"
       - "10001:10001"
       - "10002:10002"
+    volumes:
+      - azurite-data:/data
     networks:
       - reverse-proxy-network
 
@@ -210,11 +212,31 @@ services:
 
 
 volumes:
+
+
   app-pgdata:
+
+
   redis-data:
+
+
   accessmanager-pgdata:
+
+
   runner-pgdata:
 
+
+  azurite-data:
+
+
+
+
+
 networks:
+
+
   reverse-proxy-network:
+
+
     name: reverse-proxy-network
+
