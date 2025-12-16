@@ -1,0 +1,58 @@
+name: Deploy Infrastructure on Change
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USER: ${{ github.repository_owner }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GITHUB_TOKEN,USER
+          script: |
+            set -e
+            
+            # Navigate to the directory of your docker-compose file
+            cd ${{ secrets.SSH_DIRECTORY }}
+            
+            # Pull the latest changes from the git repository
+            echo "--- Pulling latest changes from Git ---"
+            git pull
+
+            # Log in to GitHub Container Registry
+            echo "--- Logging into GHCR ---"
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
+            
+            # Stop all services
+            echo "--- Stopping all services ---"
+            docker compose down
+
+            # Pull the latest versions of all images
+            echo "--- Pulling new images ---"
+            docker compose pull
+
+            # Bring all services up
+            echo "--- Starting all services ---"
+            docker compose up -d
+            
+            # Clean up dangling images
+            echo "--- Pruning old images ---"
+            docker image prune -f
+            
+            # Verify the running containers
+            echo "--- Verify running containers ---"
+            docker ps --format "table {{.Names}}	{{.Status}}	{{.Ports}}"
