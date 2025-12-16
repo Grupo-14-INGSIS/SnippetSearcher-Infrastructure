@@ -19,7 +19,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
-          GITHUB_USER: ${{ github.GHCR_USER }}
+          GITHUB_USER: ${{ secrets.GHCR_USER }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
           BRANCH: ${{ github.ref_name }}
         with:
@@ -29,6 +29,8 @@ jobs:
           envs: GITHUB_TOKEN,GITHUB_USER,VM_DIRECTORY,BRANCH
           script: |
             set -e
+            
+            [ -z "$GITHUB_USER" ] && echo "GITHUB_USER IS EMPTY" && exit 1
             
             echo "Navigating to project directory"
             cd $VM_DIRECTORY
