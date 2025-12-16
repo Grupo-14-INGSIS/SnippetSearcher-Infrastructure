@@ -35,7 +35,7 @@ jobs:
         env:
           SERVICE_NAME: ${{ steps.payload.outputs.service }}
           GITHUB_TOKEN: ${{ secrets.PAT }}
-          USER: ${{ github.GHCR_USER }}
+          USER: ${{ secrets.GHCR_USER }}
           ENV_NAME: ${{ steps.validate.outputs.environment }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
         with:
