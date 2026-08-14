@@ -4,7 +4,7 @@ services:
     container_name: "snippetsearcher-app"
     restart: unless-stopped
     build: ../SnippetSearcher-App
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-dev}
     ports:
       - "19081:8080"
     environment:
@@ -73,7 +73,7 @@ services:
       args:
         GITHUB_USER: EmmaBeni
         GITHUB_TOKEN: ${GITHUB_TOKEN}
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-dev}
     ports:
       - "19082:8080"
     environment:
@@ -139,7 +139,7 @@ services:
     container_name: "snippetsearcher-accessmanager"
     restart: unless-stopped
     build: ../SnippetSearcher-AccessManager
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-dev}
     ports:
       - "19083:8080"
     environment:
@@ -172,7 +172,7 @@ services:
     container_name: "snippetsearcher-ui"
     restart: unless-stopped
     build: ../printscript-ui
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-dev}
     ports:
       - "5173:80"
     environment:
