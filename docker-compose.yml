@@ -2,6 +2,7 @@ services:
   # App
   snippetsearcher-app:
     container_name: "snippetsearcher-app"
+    restart: unless-stopped
     build: ../SnippetSearcher-App
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:latest
     ports:
@@ -32,6 +33,7 @@ services:
       - reverse-proxy-network
 
   appdb:
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: app
@@ -50,6 +52,7 @@ services:
 
   redis:
     container_name: "redis"
+    restart: unless-stopped
     image: redis:7
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
@@ -64,6 +67,7 @@ services:
   # Runner
   snippetsearcher-runner:
     container_name: "snippetsearcher-runner"
+    restart: unless-stopped
     build:
       context: ../SnippetSearcher-Runner
       args:
@@ -92,6 +96,7 @@ services:
 
   runner-db:
     container_name: "runner-db"
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: app
@@ -105,6 +110,7 @@ services:
 
   asset-service:
     container_name: "asset-service"
+    restart: unless-stopped
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
     ports:
       - "19084:8080"
@@ -117,6 +123,7 @@ services:
 
   azurite:
     container_name: "azurite"
+    restart: unless-stopped
     image: mcr.microsoft.com/azure-storage/azurite
     ports:
       - "10000:10000"
@@ -130,6 +137,7 @@ services:
   # AccessManager
   snippetsearcher-accessmanager:
     container_name: "snippetsearcher-accessmanager"
+    restart: unless-stopped
     build: ../SnippetSearcher-AccessManager
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
     ports:
@@ -147,6 +155,7 @@ services:
 
   accessmanager-db:
     container_name: "accessmanager-db"
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: access_manager
@@ -161,6 +170,7 @@ services:
   # UI
   snippetsearcher-ui:
     container_name: "snippetsearcher-ui"
+    restart: unless-stopped
     build: ../printscript-ui
     image: ghcr.io/grupo-14-ingsis/printscript-ui:latest
     ports:
@@ -185,6 +195,34 @@ services:
       - snippetsearcher-runner
     networks:
       - reverse-proxy-network
+
+  # Reverse Proxy (Nginx)
+  reverse-proxy:
+    image: nginx:alpine
+    container_name: reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+    volumes:
+      - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - reverse-proxy-network
+    command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
+    depends_on:
+      snippetsearcher-ui:
+        condition: service_started
+      snippetsearcher-app:
+        condition: service_started
+      snippetsearcher-runner:
+        condition: service_started
+      snippetsearcher-accessmanager:
+        condition: service_started
+      asset-service:
+        condition: service_started
 
 volumes:
   app-pgdata:
