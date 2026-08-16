@@ -8,6 +8,10 @@ on:
   repository_dispatch:
     types: [new-image-ready]
 
+concurrency:
+  group: deploy-${{ github.event.client_payload.environment }}
+  cancel-in-progress: false
+#fila de deploys si se deployan muchos servicios para no generar colisión
 jobs:
   update:
     name: Deploy to ${{ github.event.client_payload.environment }}
@@ -53,7 +57,9 @@ jobs:
             docker compose pull $SERVICE_NAME
 
             docker compose up -d --no-deps --force-recreate $SERVICE_NAME
-            
-            docker image prune -f
+
+            docker compose restart reverse-proxy || true
+
+            docker image prune -f || true
             
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
