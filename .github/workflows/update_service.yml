@@ -33,10 +33,10 @@ jobs:
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          SERVICE_NAME: ${{ steps.payload.outputs.service }}
-          GITHUB_TOKEN: ${{ secrets.PAT }}
-          USER: ${{ secrets.GHCR_USER }}
-          ENV_NAME: ${{ steps.validate.outputs.environment }}
+          SERVICE_NAME: ${{ steps.payload.outputs.service_name }}
+          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          ENV_NAME: ${{ steps.payload.outputs.environment_name }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
         with:
           host: ${{ secrets.SSH_HOST }}

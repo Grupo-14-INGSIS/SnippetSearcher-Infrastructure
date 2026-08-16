@@ -18,8 +18,8 @@ jobs:
       - name: Deploy to VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
-          GITHUB_USER: ${{ secrets.GHCR_USER }}
+          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
           VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
           BRANCH: ${{ github.ref_name }}
         with:
