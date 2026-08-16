@@ -8,6 +8,7 @@ services:
     ports:
       - "19081:8080"
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       DB_USER: app
       DB_PASSWORD: app
@@ -77,6 +78,7 @@ services:
     ports:
       - "19082:8080"
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       DB_USER: app
       DB_PASSWORD: app
       DB_NAME: snippet-db
@@ -143,6 +145,7 @@ services:
     ports:
       - "19083:8080"
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       DB_USER: access_manager
       DB_PASSWORD: access_manager
       DB_NAME: compose-db
