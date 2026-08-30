@@ -174,7 +174,17 @@ services:
   snippetsearcher-ui:
     container_name: "snippetsearcher-ui"
     restart: unless-stopped
-    build: ../printscript-ui
+    build:
+      context: ../printscript-ui
+      args:
+        - VITE_AUTH0_DOMAIN=dev-65tlgyzfpbzeka8a.us.auth0.com
+        - VITE_AUTH0_CLIENT_ID=pDaLfxwVAerUnhjKfJNfxLfduUPJQi3x
+        - VITE_AUTH0_AUDIENCE=https://api.snippets.com
+        - VITE_AUTH0_REALM=User-Pass-Auth
+        - VITE_FRONTEND_URL=http://localhost:5173
+        - VITE_API_URL=http://localhost:19081
+        - VITE_BACKEND_URL=http://localhost:19081
+        - VITE_RUNNER_URL=http://localhost:19082
     image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
     ports:
       - "5173:80"
