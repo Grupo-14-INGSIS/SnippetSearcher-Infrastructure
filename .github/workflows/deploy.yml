@@ -8,6 +8,7 @@ on:
     paths:
       - 'docker-stack.yml'
       - 'reverse-proxy/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
