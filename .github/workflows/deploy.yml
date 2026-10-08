@@ -58,6 +58,9 @@ jobs:
             echo "--- Logging into GHCR ---"
             echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
 
+            # Asegurar que existan todos los directorios de bind mounts
+            mkdir -p ~/db/app-init ~/db/runner-init ~/db/accessmanager-init ~/reverse-proxy/nginx/conf.d
+
             # Desplegar el stack completo en Docker Swarm
             echo "--- Deploying Stack: snippetsearcher ---"
             docker stack deploy --with-registry-auth -c docker-stack.yml snippetsearcher
