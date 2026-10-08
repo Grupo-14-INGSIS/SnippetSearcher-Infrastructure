@@ -65,7 +65,13 @@ jobs:
 
             # Actualizar quirúrgicamente solo este servicio en Docker Swarm
             # La imagen nueva se descarga y se aplica rolling update a las réplicas
-            IMAGE_URI="ghcr.io/grupo-14-ingsis/${SERVICE_NAME}:${ENV_NAME}"
+            # Mapear nombres si difieren entre el servicio Swarm y el paquete GHCR
+            IMAGE_REPO="$SERVICE_NAME"
+            if [ "$SERVICE_NAME" = "snippetsearcher-ui" ]; then
+              IMAGE_REPO="printscript-ui"
+            fi
+
+            IMAGE_URI="ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${ENV_NAME}"
             SWARM_SERVICE="snippetsearcher_${SERVICE_NAME}"
 
             echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_URI} ---"
