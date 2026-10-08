@@ -232,7 +232,7 @@ services:
         failure_action: rollback
 
   # -------------------------------------------------------------
-  # Reverse Proxy (Nginx como Edge Gateway con Config nativo de Swarm)
+  # Reverse Proxy (Nginx como Edge Gateway)
   # -------------------------------------------------------------
   reverse-proxy:
     image: nginx:alpine
@@ -245,23 +245,14 @@ services:
         mode: ingress
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
-    configs:
-      - source: nginx_template
-        target: /etc/nginx/templates/app.conf.template
     volumes:
+      - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
     deploy:
       replicas: 1
       restart_policy:
         condition: on-failure
-
-# -------------------------------------------------------------
-# Configs de Swarm (Inyectadas en memoria en los nodos)
-# -------------------------------------------------------------
-configs:
-  nginx_template:
-    file: ./reverse-proxy/nginx/conf.d/app.conf
 
 # -------------------------------------------------------------
 # Volúmenes Persistentes
