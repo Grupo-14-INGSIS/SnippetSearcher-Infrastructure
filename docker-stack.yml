@@ -48,6 +48,7 @@ services:
       POSTGRES_DB: appdb
     volumes:
       - app-pgdata:/var/lib/postgresql/data
+      - ./db/app-init:/docker-entrypoint-initdb.d:ro
     deploy:
       replicas: 1
       restart_policy:
@@ -111,6 +112,7 @@ services:
       POSTGRES_DB: snippet-db
     volumes:
       - runner-pgdata:/var/lib/postgresql/data
+      - ./db/runner-init:/docker-entrypoint-initdb.d:ro
     deploy:
       replicas: 1
       restart_policy:
@@ -191,6 +193,7 @@ services:
       POSTGRES_DB: compose-db
     volumes:
       - accessmanager-pgdata:/var/lib/postgresql/data
+      - ./db/accessmanager-init:/docker-entrypoint-initdb.d:ro
     deploy:
       replicas: 1
       restart_policy:
