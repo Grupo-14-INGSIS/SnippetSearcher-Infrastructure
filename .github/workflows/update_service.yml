@@ -38,14 +38,14 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           SERVICE_NAME: ${{ steps.payload.outputs.service_name }}
-          ACTION_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
-          ACTION_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          GHCR_PAT: ${{ secrets.PAT }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
           ENV_NAME: ${{ steps.payload.outputs.environment_name }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: ACTION_TOKEN,ACTION_USER,SERVICE_NAME,ENV_NAME
+          envs: GHCR_PAT,GHCR_USER,SERVICE_NAME,ENV_NAME
           script: |
             set -e
             cd ~
@@ -53,15 +53,15 @@ jobs:
             # Cargar variables del host si existen
             if [ -f .env ]; then
               set -a
-              source .env
+              source .env 2>/dev/null || true
               set +a
             fi
 
-            TOKEN="${GITHUB_TOKEN:-$ACTION_TOKEN}"
-            USER_REGISTRY="${ACTION_USER}"
+            LOGIN_TOKEN="${GITHUB_TOKEN:-$GHCR_PAT}"
+            LOGIN_USER="${GHCR_USER}"
 
             echo "--- Logging into GHCR ---"
-            echo "$TOKEN" | docker login ghcr.io -u "$USER_REGISTRY" --password-stdin
+            echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
 
             # Actualizar quirúrgicamente solo este servicio en Docker Swarm
             # La imagen nueva se descarga y se aplica rolling update a las réplicas

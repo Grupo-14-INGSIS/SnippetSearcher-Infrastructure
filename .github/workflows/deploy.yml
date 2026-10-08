@@ -32,13 +32,13 @@ jobs:
       - name: Deploy Swarm Stack via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          ACTION_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
-          ACTION_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          GHCR_PAT: ${{ secrets.PAT }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: ACTION_TOKEN,ACTION_USER
+          envs: GHCR_PAT,GHCR_USER
           script: |
             set -e
             cd ~
@@ -46,17 +46,17 @@ jobs:
             # Cargar variables de entorno del host (~/.env)
             if [ -f .env ]; then
               set -a
-              source .env
+              source .env 2>/dev/null || true
               set +a
             fi
 
-            # Determinar credenciales para GHCR
-            TOKEN="${GITHUB_TOKEN:-$ACTION_TOKEN}"
-            USER_REGISTRY="${ACTION_USER}"
+            # Si el token no vino en .env, usar el del secret de Actions
+            LOGIN_TOKEN="${GITHUB_TOKEN:-$GHCR_PAT}"
+            LOGIN_USER="${GHCR_USER}"
 
             # Login en GitHub Container Registry
             echo "--- Logging into GHCR ---"
-            echo "$TOKEN" | docker login ghcr.io -u "$USER_REGISTRY" --password-stdin
+            echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
 
             # Desplegar el stack completo en Docker Swarm
             echo "--- Deploying Stack: snippetsearcher ---"
