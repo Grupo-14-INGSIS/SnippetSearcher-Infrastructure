@@ -8,8 +8,11 @@ on:
   repository_dispatch:
     types: [new-image-ready]
 
+# Un grupo por servicio: si se agrupa solo por ambiente, GitHub cancela ("superseded") los
+# runs pendientes cuando llegan varios dispatches seguidos (app, runner y ui a la vez) y
+# alguno de los servicios queda sin actualizar en la VM.
 concurrency:
-  group: deploy-${{ github.event.client_payload.environment }}
+  group: deploy-${{ github.event.client_payload.environment }}-${{ github.event.client_payload.service }}
   cancel-in-progress: false
 
 jobs:
