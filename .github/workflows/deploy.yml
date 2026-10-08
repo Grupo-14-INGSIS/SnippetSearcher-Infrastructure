@@ -4,20 +4,35 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
-      - 'docker-compose.yml'
+      - 'docker-stack.yml'
+      - 'reverse-proxy/**'
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy Infrastructure
+    name: Deploy Stack to ${{ github.ref_name == 'main' && 'production' || 'develop' }}
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
     steps:
-      - name: Deploy to server via SSH
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Copy stack definition and nginx configs to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "docker-stack.yml,reverse-proxy/**"
+          target: "~/"
+
+      - name: Deploy Swarm Stack via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          USER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          USER: ${{ secrets.GHCR_USER || github.repository_owner }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -25,34 +40,34 @@ jobs:
           envs: GITHUB_TOKEN,USER
           script: |
             set -e
+            cd ~
             
-            # Navigate to the directory of your docker-compose file
-            cd ${{ secrets.SSH_DIRECTORY }}
-            
-            # Pull the latest changes from the git repository
-            echo "--- Pulling latest changes from Git ---"
-            git pull
+            # Cargar variables de entorno del host (~/.env)
+            if [ -f .env ]; then
+              set -a
+              source .env
+              set +a
+            fi
 
-            # Log in to GitHub Container Registry
+            # Login en GitHub Container Registry
             echo "--- Logging into GHCR ---"
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
-            
-            # Stop all services
-            echo "--- Stopping all services ---"
-            docker compose down
 
-            # Pull the latest versions of all images
-            echo "--- Pulling new images ---"
-            docker compose pull
+            # Desplegar el stack completo en Docker Swarm
+            echo "--- Deploying Stack: snippetsearcher ---"
+            docker stack deploy --with-registry-auth -c docker-stack.yml snippetsearcher
 
-            # Bring all services up
-            echo "--- Starting all services ---"
-            docker compose up -d
-            
-            # Clean up dangling images
-            echo "--- Pruning old images ---"
-            docker image prune -f
-            
-            # Verify the running containers
-            echo "--- Verify running containers ---"
-            docker ps --format "table {{.Names}}	{{.Status}}	{{.Ports}}"
+            # Forzar actualización de todos los servicios para aplicar cambios de infra
+            echo "--- Forcing update of services to reflect infra changes ---"
+            docker service update --force snippetsearcher_snippetsearcher-app || true
+            docker service update --force snippetsearcher_snippetsearcher-runner || true
+            docker service update --force snippetsearcher_snippetsearcher-accessmanager || true
+            docker service update --force snippetsearcher_snippetsearcher-ui || true
+            docker service update --force snippetsearcher_reverse-proxy || true
+
+            # Limpiar imágenes obsoletas
+            docker image prune -f || true
+
+            # Verificar estado de los servicios en el cluster
+            echo "--- Verifying Stack Services ---"
+            docker stack services snippetsearcher

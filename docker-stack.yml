@@ -1,0 +1,274 @@
+version: '3.8'
+
+services:
+  # -------------------------------------------------------------
+  # App (4 réplicas con balanceo de carga interno Swarm)
+  # -------------------------------------------------------------
+  snippetsearcher-app:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-develop}
+    ports:
+      - target: 8080
+        published: 19081
+        mode: ingress
+    environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
+      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: appdb
+      DB_HOST: appdb
+      DB_PORT: 5432
+      ACCESS_MANAGER_HOST: snippetsearcher-accessmanager
+      ACCESS_MANAGER_PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RUNNER_HOST: snippetsearcher-runner
+      RUNNER_PORT: 8080
+    deploy:
+      replicas: 4
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+
+  # -------------------------------------------------------------
+  # Base de Datos App (1 réplica con persistencia de volumen)
+  # -------------------------------------------------------------
+  appdb:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: appdb
+    volumes:
+      - app-pgdata:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # Redis: EXCLUSIVAMENTE Message Queue (Streams)
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7
+    volumes:
+      - redis-data:/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # Runner (4 réplicas con balanceo de carga interno Swarm)
+  # -------------------------------------------------------------
+  snippetsearcher-runner:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-develop}
+    ports:
+      - target: 8080
+        published: 19082
+        mode: ingress
+    environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: snippet-db
+      DB_HOST: runner-db
+      DB_PORT: 5432
+      BUCKET_SERVICE: asset-service
+      BUCKET_PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      APP_HOST: snippetsearcher-app
+      APP_PORT: 8080
+    deploy:
+      replicas: 4
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+
+  # -------------------------------------------------------------
+  # Base de Datos Runner
+  # -------------------------------------------------------------
+  runner-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: snippet-db
+    volumes:
+      - runner-pgdata:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # Asset Service & Emulador Azurite
+  # -------------------------------------------------------------
+  asset-service:
+    image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
+    ports:
+      - target: 8080
+        published: 19084
+        mode: ingress
+    environment:
+      AZURE_HOST: http://azurite
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - target: 10000
+        published: 10000
+        mode: ingress
+      - target: 10001
+        published: 10001
+        mode: ingress
+      - target: 10002
+        published: 10002
+        mode: ingress
+    volumes:
+      - azurite-data:/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # AccessManager (4 réplicas con balanceo de carga interno Swarm)
+  # -------------------------------------------------------------
+  snippetsearcher-accessmanager:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-develop}
+    ports:
+      - target: 8080
+        published: 19083
+        mode: ingress
+    environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
+      DB_USER: access_manager
+      DB_PASSWORD: access_manager
+      DB_NAME: compose-db
+      DB_HOST: accessmanager-db
+      DB_PORT: 5432
+    deploy:
+      replicas: 4
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+
+  # -------------------------------------------------------------
+  # Base de Datos AccessManager
+  # -------------------------------------------------------------
+  accessmanager-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: access_manager
+      POSTGRES_PASSWORD: access_manager
+      POSTGRES_DB: compose-db
+    volumes:
+      - accessmanager-pgdata:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # UI (4 réplicas con balanceo de carga interno Swarm)
+  # -------------------------------------------------------------
+  snippetsearcher-ui:
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
+    ports:
+      - target: 80
+        published: 5173
+        mode: ingress
+    environment:
+      - APP_HOST=snippetsearcher-app
+      - APP_PORT=8080
+      - RUNNER_SERVICE=snippetsearcher-runner
+      - RUNNER_PORT=8080
+      - VITE_AUTH0_DOMAIN=dev-65tlgyzfpbzeka8a.us.auth0.com
+      - VITE_AUTH0_CLIENT_ID=pDaLfxwVAerUnhjKfJNfxLfduUPJQi3x
+      - VITE_AUTH0_AUDIENCE=https://api.snippets.com
+      - VITE_AUTH0_REALM=Username-Password-Authentication
+      - VITE_FRONTEND_URL=http://localhost:5173
+      - VITE_API_URL=http://localhost:19081
+      - VITE_BACKEND_URL=http://localhost:19081
+      - VITE_RUNNER_URL=http://localhost:19082
+    deploy:
+      replicas: 4
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+
+  # -------------------------------------------------------------
+  # Reverse Proxy (Nginx como Edge Gateway con Config nativo de Swarm)
+  # -------------------------------------------------------------
+  reverse-proxy:
+    image: nginx:alpine
+    ports:
+      - target: 80
+        published: 80
+        mode: ingress
+      - target: 443
+        published: 443
+        mode: ingress
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+    configs:
+      - source: nginx_template
+        target: /etc/nginx/templates/app.conf.template
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+# -------------------------------------------------------------
+# Configs de Swarm (Inyectadas en memoria en los nodos)
+# -------------------------------------------------------------
+configs:
+  nginx_template:
+    file: ./reverse-proxy/nginx/conf.d/app.conf
+
+# -------------------------------------------------------------
+# Volúmenes Persistentes
+# -------------------------------------------------------------
+volumes:
+  app-pgdata:
+  redis-data:
+  accessmanager-pgdata:
+  runner-pgdata:
+  azurite-data:
