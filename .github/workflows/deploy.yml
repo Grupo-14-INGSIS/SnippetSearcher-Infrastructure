@@ -5,6 +5,12 @@ on:
     branches:
       - main
       - develop
+    # Solo redeployar el stack (reinicia TODOS los servicios, ~4 min de 502) cuando cambia
+    # algo que la VM realmente usa; un cambio de docs o de workflows no debe reiniciar nada.
+    paths:
+      - docker-stack.yml
+      - reverse-proxy/**
+      - db/**
   workflow_dispatch:
 
 permissions:
