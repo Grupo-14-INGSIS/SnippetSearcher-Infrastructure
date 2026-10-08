@@ -67,7 +67,9 @@ services:
         condition: on-failure
 
   # -------------------------------------------------------------
-  # Runner (4 réplicas con balanceo de carga interno Swarm)
+  # Runner (2 réplicas con balanceo de carga interno Swarm)
+  # La ejecución interactiva es stateless: el cliente manda los inputs
+  # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-develop}
