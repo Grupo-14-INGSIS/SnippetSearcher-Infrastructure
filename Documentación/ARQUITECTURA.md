@@ -8,7 +8,7 @@ El proyecto cuenta con restricciones formales impuestas por el entorno y la cát
 * **Base de Datos**: PostgreSQL como base relacional obligatoria.
 * **Middleware**: Redis (utilizado **EXCLUSIVAMENTE como Cola de Mensajería / Streams**) y AssetService (Object / Blob Storage para código fuente).
 * **Reverse Proxy / Gateway**: Nginx para enrutamiento, terminación SSL y aislamiento de red.
-* **Infraestructura**: Despliegue en Máquinas Virtuales (VMs) Linux con Docker Compose.
+* **Infraestructura**: Despliegue en Máquinas Virtuales (VMs) Linux mediante **Docker Swarm** (Stacks declarativos con réplicas stateless y balanceo interno) en entornos de servidores (`dev` y `prod`), y Docker Compose para desarrollo local.
 * **Autenticación**: Auth0 (JWT Bearer tokens y protección de rutas).
 * **Monitoreo & Trazabilidad**: New Relic con `-javaagent:newrelic.jar` y correlación continua vía `X-Request-Id`.
 * **Objetivo de Diseño**: Lograr máxima cohesión, bajo acoplamiento (principios SOLID), tipado estricto, justificación real de cada componente y extensibilidad multi-lenguaje (PrintScript, Go, Rust, Python).

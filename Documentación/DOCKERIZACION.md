@@ -191,7 +191,7 @@ docker compose logs -f snippetsearcher-app
 docker compose logs -f snippetsearcher-runner
 ```
 
-### 4. Detener y Limpiar el Entorno
+### 4. Detener y Limpiar el Entorno Local
 ```powershell
 # Detener sin borrar volúmenes (mantiene datos de base de datos)
 docker compose down
@@ -199,3 +199,19 @@ docker compose down
 # Detener borrando volúmenes (reseteo limpio de bases de datos)
 docker compose down -v
 ```
+
+---
+
+## 6. Orquestación en Servidores con Docker Swarm (`docker-stack.yml`)
+
+Para entornos productivos y de desarrollo en VMs de Azure, se utiliza [`SnippetSearcher-Infrastructure/docker-stack.yml`](../docker-stack.yml), el cual extiende la definición de contenedores con capacidades de clustering:
+1. **Red Overlay Automática**: Los servicios se conectan sin requerir configuración manual de drivers de red.
+2. **Redundancia (2 Réplicas en Stateless)**: `snippetsearcher-app`, `snippetsearcher-runner`, `snippetsearcher-accessmanager` y `snippetsearcher-ui` cuentan con 2 réplicas balanceadas por IPVS interno de Swarm.
+3. **Persistencia ACID (1 Réplica en Stateful)**: Bases de datos y Redis limitadas a 1 réplica para prevenir corrupción de datos en volúmenes locales.
+4. **Despliegue Inmutable**: El host descarga imágenes directamente de GitHub Container Registry (`ghcr.io`), eliminando repositorios clonados en la VM.
+
+```bash
+# Despliegue en la VM
+docker stack deploy --with-registry-auth -c docker-stack.yml snippetsearcher
+```
+

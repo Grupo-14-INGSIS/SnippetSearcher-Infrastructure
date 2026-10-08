@@ -24,14 +24,16 @@ Este documento detalla todas las rutas del sistema adaptadas a las buenas práct
 
 ## 2. Snippets (`/api/v1/snippets`)
 
+Los endpoints de snippets exponen tanto la ruta canónica estándar REST (`/api/v1/snippets/{snippetId}`) como la ruta de contenedor (`/api/v1/snippets/{container}/{snippetId}`) para compatibilidad con el asset storage:
+
 | Método | Endpoint | Descripción | Auth Requerida |
 | :--- | :--- | :--- | :---: |
 | `GET` | `/api/v1/snippets` | Lista todos los snippets del usuario autenticado (propios y compartidos con rol). | Sí (Bearer JWT) |
-| `GET` | `/api/v1/snippets/{snippetId}` | Obtiene el snippet consolidado (metadatos de App + contenido de código de AssetService). | Sí (Bearer JWT) |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Registra o sobreescribe un snippet y asigna al creador como `owner`. | Sí (Bearer JWT) |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Actualiza metadatos parciales del snippet (`description`, `version`). | Sí (Owner) |
-| `DELETE` | `/api/v1/snippets/{snippetId}` | Elimina el snippet de la base de datos, sus tests asociados y su asset binario. | Sí (Owner) |
-| `PATCH` | `/api/v1/snippets/{snippetId}/status` | Actualiza el estado de linteo/formateo y el cumplimiento (`compliant`/`not-compliant`). | Interno / Service |
+| `GET` | `/api/v1/snippets/{snippetId}`<br>`/api/v1/snippets/{container}/{snippetId}` | Obtiene el snippet consolidado (metadatos de App + contenido de código de AssetService). | Sí (Bearer JWT) |
+| `PUT` | `/api/v1/snippets/{snippetId}`<br>`/api/v1/snippets/{container}/{snippetId}` | Registra o sobreescribe un snippet y asigna al creador como `owner`. | Sí (Bearer JWT) |
+| `PATCH` | `/api/v1/snippets/{snippetId}`<br>`/api/v1/snippets/{container}/{snippetId}` | Actualiza el contenido del snippet y re-evalúa tests/linteo. | Sí (Owner) |
+| `DELETE` | `/api/v1/snippets/{snippetId}`<br>`/api/v1/snippets/{container}/{snippetId}` | Elimina el snippet de la base de datos, sus tests asociados y su asset binario. | Sí (Owner) |
+| `PATCH` | `/api/v1/snippets/{snippetId}/status` | Actualiza el estado de linteo/formateo y el cumplimiento (`compliant`/`not-compliant`). | Interno (sin requerir JWT de usuario) |
 
 ---
 

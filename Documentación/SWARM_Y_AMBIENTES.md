@@ -33,12 +33,12 @@ En Docker tradicional, la máquina ejecuta contenedores aislados. Al inicializar
    - **Si cambia Infraestructura** $\rightarrow$ se redeploya todo el stack y se actualizan todos los servicios.
    - **Si cambia un Microservicio puntual** $\rightarrow$ solo se actualiza ese microservicio con *zero-downtime*.
 
-### C. Redundancia Simulada: 4 Réplicas vs. 1 Réplica
-En [`docker-stack.yml`](../docker-stack.yml) se aplicó la distinción entre servicios con y sin estado:
+### C. Redundancia Optimizada: 2 Réplicas vs. 1 Réplica
+En [`docker-stack.yml`](../docker-stack.yml) se aplicó la distinción entre servicios con y sin estado, dimensionado a **2 réplicas** para garantizar redundancia real y conmutación por error sin agotar la memoria de las VMs de Azure:
 
 | Tipo de Componente | Servicios | Réplicas | Justificación Técnica |
 | :--- | :--- | :---: | :--- |
-| **Stateless (Sin Estado)** | `snippetsearcher-app`<br>`snippetsearcher-runner`<br>`snippetsearcher-accessmanager`<br>`snippetsearcher-ui` | **4** | Simula alta disponibilidad y redundancia en la misma VM. Docker Swarm distribuye las peticiones en *Round-Robin* mediante su balanceador interno (Routing Mesh / IPVS). Si una réplica falla, Swarm levanta una nueva de inmediato. |
+| **Stateless (Sin Estado)** | `snippetsearcher-app`<br>`snippetsearcher-runner`<br>`snippetsearcher-accessmanager`<br>`snippetsearcher-ui` | **2** | Provee alta disponibilidad y redundancia en la misma VM. Docker Swarm distribuye las peticiones en *Round-Robin* mediante su balanceador interno (Routing Mesh / IPVS). Si una réplica se actualiza o reinicia, la otra continúa respondiendo con *zero-downtime*. Con 2 réplicas de Runner, la ejecución interactiva opera de forma **stateless** (el cliente envía los inputs acumulados en cada turno). |
 | **Stateful (Con Estado)** | `appdb`<br>`runner-db`<br>`accessmanager-db`<br>`redis`<br>`azurite`<br>`reverse-proxy` | **1** | **Múltiples réplicas de bases de datos relacionales sobre el mismo volumen de disco corrompen los datos**. Mantienen 1 única réplica garantizando integridad referencial y consistencia ACID. |
 
 ---
@@ -54,7 +54,7 @@ En [`docker-stack.yml`](../docker-stack.yml) se aplicó la distinción entre ser
 ### P3: ¿Nginx ya estaba como Reverse Proxy o se agregó ahora?
 > **Respuesta**: El contenedor `reverse-proxy` (Nginx) ya existía en compose, pero:
 > 1. No estaba formalizado ni dibujado en los diagramas PlantUML de la arquitectura (la UI parecía comunicarse directo con los backends).
-> 2. Dependía de carpetas montadas del repositorio local que al borrar los repos de la VM fallarían. Se integró mediante `configs:` nativo de Docker Swarm y se documentó formalmente en el perímetro del sistema.
+> 2. Dependía de carpetas montadas del repositorio local que al borrar los repos de la VM fallarían. Se integró mediante montaje directo del template en `volumes:` y resolución de variable `$DOMAIN_NAME` en tiempo de inicio.
 
 ### P4: ¿Se pierden las variables de entorno al borrar los repositorios de la VM?
 > **Respuesta**: No, porque antes del borrado se resguardó el archivo `.env` en la raíz del usuario (`~/.env`). Los repositorios clonados (`rm -rf SnippetSearcher-*`) se borraron, pero `~/.env` permanece en el host.
@@ -74,34 +74,55 @@ on:
     branches:
       - main
       - develop
+    paths:
+      - 'docker-stack.yml'
+      - 'reverse-proxy/**'
+      - 'db/**'
 
 jobs:
   deploy:
     name: Deploy Stack to ${{ github.ref_name == 'main' && 'production' || 'develop' }}
     environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
 ```
+- **Filtro de paths**: `deploy.yml` sólo se activa si hay cambios estructurales (`docker-stack.yml`, `reverse-proxy/`, `db/`), evitando redeploys innecesarios ante cambios en documentación o workflows.
 - **Push a `develop` en Infra** $\rightarrow$ Utiliza los GitHub Secrets del environment `develop` y despliega en la **VM de Dev**.
 - **Push / Merge a `main` en Infra** $\rightarrow$ Utiliza los GitHub Secrets del environment `production` y despliega en la **VM de Prod**.
 
 ### B. Flujo de Despliegue de Infraestructura (`deploy.yml`)
 1. Hace checkout del repo de infraestructura en GitHub Actions.
-2. Copia vía **SCP** el archivo `docker-stack.yml` y las configs de Nginx al `~` de la VM destino.
+2. Copia vía **SCP** el archivo `docker-stack.yml`, la carpeta `reverse-proxy/` y las carpetas de inicialización de base de datos (`db/`) al `~` de la VM destino (creando los directorios con `mkdir -p` como red de seguridad).
 3. Se conecta por SSH a la VM:
    - Carga las variables locales del host (`source ~/.env`).
    - Se autentica en GitHub Container Registry (`docker login ghcr.io`).
    - Despliega el stack: `docker stack deploy --with-registry-auth -c docker-stack.yml snippetsearcher`.
-   - Fuerza la actualización de todos los servicios para que tomen cualquier cambio de configuración (`docker service update --force ...`).
-   - Limpia imágenes obsoletas con `docker image prune -f`.
+   - Limpia imágenes obsoletas con `docker image prune -f || true`.
 
 ### C. Flujo de Despliegue de Microservicios (`update_service.yml`)
 Cuando se hace commit en un microservicio (`App`, `Runner`, `AccessManager`, `UI`):
 1. El microservicio compila, corre tests y publica su imagen en GHCR (`ghcr.io/grupo-14-ingsis/<service>:<branch>`).
-2. Envía un `repository_dispatch` hacia el repositorio de infraestructura indicando el servicio y el environment (`develop` o `production`).
-3. El workflow `update_service.yml` se conecta a la VM respectiva y ejecuta:
-   ```bash
-   docker service update --with-registry-auth --image ghcr.io/grupo-14-ingsis/$SERVICE_NAME:$ENV_NAME snippetsearcher_$SERVICE_NAME
+2. Envía un `repository_dispatch` hacia el repositorio de infraestructura con evento `new-image-ready`, indicando el servicio y el environment.
+3. El workflow `update_service.yml` maneja **concurrencia por servicio y ambiente**:
+   ```yaml
+   concurrency:
+     group: deploy-${{ github.event.client_payload.environment }}-${{ github.event.client_payload.service }}
+     cancel-in-progress: false
    ```
-4. **Resultado**: Swarm actualiza **únicamente las 4 réplicas de ese microservicio con rolling update (zero-downtime)**, sin reiniciar bases de datos ni tocar ningún otro servicio.
+   Esto evita que pushes simultáneos a diferentes microservicios cancelen despliegues en curso ("superseded").
+4. **Mapeo de nombres**: Mapea automáticamente el servicio Swarm al paquete GHCR correspondiente:
+   - `snippetsearcher-ui` $\rightarrow$ imagen `ghcr.io/grupo-14-ingsis/printscript-ui:<env>`
+   - `snippetsearcher-app` $\rightarrow$ imagen `ghcr.io/grupo-14-ingsis/snippetsearcher-app:<env>`
+   - `snippetsearcher-runner` $\rightarrow$ imagen `ghcr.io/grupo-14-ingsis/snippetsearcher-runner:<env>`
+   - `snippetsearcher-accessmanager` $\rightarrow$ imagen `ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:<env>`
+5. Ejecuta en la VM:
+   ```bash
+   docker service update --with-registry-auth --image "$IMAGE_URI" "$SWARM_SERVICE"
+   ```
+6. **Resultado**: Swarm actualiza **únicamente las 2 réplicas de ese microservicio con rolling update (zero-downtime)**, sin reiniciar bases de datos ni tocar ningún otro componente.
+
+### D. Configuración Dinámica de Tests E2E (Cypress)
+En `printscript-ui/cypress.config.ts`, Cypress detecta la rama activa:
+- En **`develop`**: Configura `baseUrl: https://snippet26dev.duckdns.org`.
+- En **`main`** / **`production`**: Configura `baseUrl: https://snippet26prod.duckdns.org`.
 
 ---
 
@@ -116,7 +137,7 @@ docker node ls
 # Listar los stacks activos
 docker stack ls
 
-# Ver todos los servicios del stack y sus réplicas activas (ej: 4/4)
+# Ver todos los servicios del stack y sus réplicas activas (ej: 2/2)
 docker stack services snippetsearcher
 
 # Ver en detalle las réplicas y en qué estado se encuentran
