@@ -38,20 +38,30 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           SERVICE_NAME: ${{ steps.payload.outputs.service_name }}
-          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
-          USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          ACTION_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          ACTION_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
           ENV_NAME: ${{ steps.payload.outputs.environment_name }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GITHUB_TOKEN,SERVICE_NAME,ENV_NAME,USER
+          envs: ACTION_TOKEN,ACTION_USER,SERVICE_NAME,ENV_NAME
           script: |
             set -e
             cd ~
             
+            # Cargar variables del host si existen
+            if [ -f .env ]; then
+              set -a
+              source .env
+              set +a
+            fi
+
+            TOKEN="${GITHUB_TOKEN:-$ACTION_TOKEN}"
+            USER_REGISTRY="${ACTION_USER}"
+
             echo "--- Logging into GHCR ---"
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
+            echo "$TOKEN" | docker login ghcr.io -u "$USER_REGISTRY" --password-stdin
 
             # Actualizar quirúrgicamente solo este servicio en Docker Swarm
             # La imagen nueva se descarga y se aplica rolling update a las réplicas

@@ -10,6 +10,10 @@ on:
       - 'reverse-proxy/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   deploy:
     name: Deploy Stack to ${{ github.ref_name == 'main' && 'production' || 'develop' }}
@@ -31,13 +35,13 @@ jobs:
       - name: Deploy Swarm Stack via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
-          USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          ACTION_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          ACTION_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GITHUB_TOKEN,USER
+          envs: ACTION_TOKEN,ACTION_USER
           script: |
             set -e
             cd ~
@@ -49,9 +53,13 @@ jobs:
               set +a
             fi
 
+            # Determinar credenciales para GHCR
+            TOKEN="${GITHUB_TOKEN:-$ACTION_TOKEN}"
+            USER_REGISTRY="${ACTION_USER}"
+
             # Login en GitHub Container Registry
             echo "--- Logging into GHCR ---"
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
+            echo "$TOKEN" | docker login ghcr.io -u "$USER_REGISTRY" --password-stdin
 
             # Desplegar el stack completo en Docker Swarm
             echo "--- Deploying Stack: snippetsearcher ---"
