@@ -25,7 +25,7 @@ services:
       RUNNER_HOST: snippetsearcher-runner
       RUNNER_PORT: 8080
     deploy:
-      replicas: 4
+      replicas: 2
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -88,7 +88,7 @@ services:
       APP_HOST: snippetsearcher-app
       APP_PORT: 8080
     deploy:
-      replicas: 4
+      replicas: 2
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -168,7 +168,7 @@ services:
       DB_HOST: accessmanager-db
       DB_PORT: 5432
     deploy:
-      replicas: 4
+      replicas: 2
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -219,7 +219,7 @@ services:
       - VITE_BACKEND_URL=http://localhost:19081
       - VITE_RUNNER_URL=http://localhost:19082
     deploy:
-      replicas: 4
+      replicas: 2
       restart_policy:
         condition: on-failure
         delay: 5s
