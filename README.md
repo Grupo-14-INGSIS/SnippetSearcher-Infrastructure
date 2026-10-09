@@ -1,70 +1,97 @@
-# SnippetSearcher-Infrastructure
+# SnippetSearcher - Infrastructure & Deployment
+
+Repositorio central de infraestructura, orquestación y despliegue continuo (CI/CD) para el ecosistema **SnippetSearcher**.
 
 ---
 
-## Login to ghcr
-### Log in:
-<pre>
-echo "&lt;TOKEN&gt;" | docker login ghcr.io -u &lt;USER&gt; --password-stdin
-</pre>
+## 1. Índice de Documentación Técnica
 
-The token must have the `read:packages` property.
-
-### Test:
-<pre>
-docker pull ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-</pre>
-
-Should output:
-<pre>
-latest: Pulling from grupo-14-ingsis/snippetsearcher-accessmanager
-878ac3eb251b: Pull complete
-015f975f5fed: Pull complete
-70d49c5cce9c: Pull complete
-5bd36b0c9c64: Pull complete
-ef8b2747f33a: Pull complete
-Digest: sha256:f23d393b3b5408ab4eaaf317e48ad595b15f024932ca293d18c39640636e3867
-Status: Downloaded newer image for ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:latest
-</pre>
+Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`Documentación/`](./Documentación/):
+* **[Arquitectura General](Documentación/ARQUITECTURA.md)**: Justificación técnica de microservicios, bases de datos PostgreSQL, Redis Streams, Nginx y New Relic.
+* **[Dockerización y Docker Compose](Documentación/DOCKERIZACION.md)**: Explicación de los Dockerfiles Multi-stage, imágenes publicadas en GHCR y ejecución local con Docker Compose.
+* **[Docker Swarm y Ambientes](Documentación/SWARM_Y_AMBIENTES.md)**: Configuración de Stacks en Swarm, 2 réplicas stateless, balanceo interno IPVS, rolling updates y estrategia de branching (`develop` y `production`).
+* **[Flujo de un Snippet y Comparativa](Documentación/FLUJO_Y_COMPARATIVA_ARQUITECTURA.md)**: Diagramas PlantUML de secuencia, Nginx como Reverse Proxy y Redis exclusivamente como Message Queue.
+* **[Catálogo de Rutas REST](Documentación/RUTAS_REST.md)**: Especificación técnica de endpoints RESTful.
+* **[Checklist de Producción](PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
 
 ---
 
-## Connect to VM via SSH:
-<pre>ssh -i &lt;.pem file&gt; azureuser@20.246.106.222</pre>
+## 2. Ejecución en Entorno Local (Docker Desktop / Docker Compose)
+
+Para levantar el ecosistema completo en tu máquina local:
+
+### Requisitos:
+* **Docker Desktop** instalado y en ejecución.
+* Repositorios clonados en el mismo directorio padre:
+  - `SnippetSearcher-Infrastructure`
+  - `SnippetSearcher-App`
+  - `SnippetSearcher-Runner`
+  - `SnippetSearcher-AccessManager`
+  - `printscript-ui`
+
+### Levantar el entorno:
+```bash
+# 1. Posicionarse en el repositorio de infraestructura
+cd SnippetSearcher-Infrastructure
+
+# 2. Iniciar todos los servicios, bases de datos, cola y proxy
+docker compose up -d --build
+
+# 3. Verificar el estado de los contenedores
+docker compose ps
+```
+
+### URLs de acceso local:
+* **Frontend Web**: `http://localhost:5173` (o a través del proxy `http://localhost`)
+* **App Backend**: `http://localhost:19081`
+* **Runner Backend**: `http://localhost:19082`
+* **AccessManager Backend**: `http://localhost:19083`
+
+### Detener el entorno:
+```bash
+# Detener contenedores manteniendo volúmenes de datos
+docker compose down
+
+# Detener eliminando volúmenes (reseteo limpio de bases de datos)
+docker compose down -v
+```
 
 ---
 
-## Create GitHub Actions Runner:
+## 3. Despliegue en Servidores (Docker Swarm / VMs Azure)
 
-### Download runner
-<pre>
-# Create a folder under the drive root
-$ mkdir actions-runner; cd actions-runner
+En los servidores de Azure (`dev` y `prod`), el sistema corre desacoplado sin código fuente en la máquina virtual, orquestado como un Stack de Docker Swarm con rolling updates automáticos:
 
-# Download the latest runner package
-$ Invoke-WebRequest -Uri https://github.com/actions/runner/releases/download/v2.329.0/actions-runner-win-x64-2.329.0.zip -OutFile actions-runner-win-x64-2.329.0.zip
+| Ambiente | Dominio DuckDNS | Rama Infra | Rama Microservicios | VM Azure (South Africa North) |
+| :--- | :--- | :---: | :---: | :--- |
+| **Desarrollo (Dev)** | `https://snippet26dev.duckdns.org` | `develop` | `develop` | `102.133.145.119` (`dev`) |
+| **Producción (Prod)** | `https://snippet26prod.duckdns.org` | `main` | `production` | `4.222.216.199` (`prod`) |
 
-# Optional: Validate the hash
-$ if((Get-FileHash -Path actions-runner-win-x64-2.329.0.zip -Algorithm SHA256).Hash.ToUpper() -ne 'f60be5ddf373c52fd735388c3478536afd12bfd36d1d0777c6b855b758e70f25'.ToUpper()){ throw 'Computed checksum did not match' }
+### Comandos de diagnóstico en las VMs:
+```bash
+# Ver estado del Stack y réplicas (2/2 en stateless, 1/1 en bases de datos)
+docker stack services snippetsearcher
 
-# Extract the installer
-$ Add-Type -AssemblyName System.IO.Compression.FileSystem ; [System.IO.Compression.ZipFile]::ExtractToDirectory("$PWD/actions-runner-win-x64-2.329.0.zip", "$PWD")
-</pre>
+# Ver detalle de réplicas y eventos
+docker stack ps snippetsearcher
 
-### Configure runner
-<pre>
-# Create the runner and start the configuration experience
-$ ./config.cmd --url https://github.com/Grupo-14-INGSIS/SnippetSearcher-Infrastructure --token [YOUR_TOKEN_HERE]
+# Ver logs en vivo de un microservicio
+docker service logs -f snippetsearcher_snippetsearcher-app
+docker service logs -f snippetsearcher_snippetsearcher-runner
+```
 
-# Run it!
-$ ./run.cmd
-</pre>
+---
 
-### Start runner
+## 4. Imágenes Docker en GitHub Container Registry (GHCR)
 
-Execute every time the VM starts
-<pre>
-$ ./run.cmd
-</pre>
-Once the VM stops, the runner is deactivated
+Las imágenes son construidas y publicadas automáticamente por GitHub Actions ante cada commit en las ramas correspondientes:
+* `ghcr.io/grupo-14-ingsis/snippetsearcher-app:<tag>`
+* `ghcr.io/grupo-14-ingsis/snippetsearcher-runner:<tag>`
+* `ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:<tag>`
+* `ghcr.io/grupo-14-ingsis/printscript-ui:<tag>`
+
+Para descargarlas manualmente desde una terminal con Docker:
+```bash
+echo "<GITHUB_TOKEN_O_PAT>" | docker login ghcr.io -u <GITHUB_USER> --password-stdin
+docker pull ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
+```
