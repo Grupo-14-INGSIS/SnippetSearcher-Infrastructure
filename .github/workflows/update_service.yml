@@ -77,8 +77,15 @@ jobs:
             IMAGE_URI="ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${ENV_NAME}"
             SWARM_SERVICE="snippetsearcher_${SERVICE_NAME}"
 
-            echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_URI} ---"
-            docker service update --with-registry-auth --image "$IMAGE_URI" "$SWARM_SERVICE"
+            # Bajar la imagen y actualizar el servicio pineando el DIGEST, no el tag.
+            # Si se pasa solo el tag y la resolucion contra el registry falla o llega
+            # antes de que termine el push, Swarm reutiliza la imagen cacheada en el
+            # nodo y las replicas quedan con la version vieja aunque el run sea verde.
+            echo "--- Pulling ${IMAGE_URI} ---"
+            docker pull "$IMAGE_URI"
+            IMAGE_DIGEST="$(docker image inspect "$IMAGE_URI" --format '{{index .RepoDigests 0}}')"
+            echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_DIGEST} ---"
+            docker service update --with-registry-auth --image "$IMAGE_DIGEST" "$SWARM_SERVICE"
 
             # Limpiar imágenes viejas
             docker image prune -f || true
