@@ -1,0 +1,49 @@
+@startuml Arquitectura_Sin_Nginx
+skinparam roundcorner 10
+skinparam defaultTextAlignment center
+skinparam shadowing false
+skinparam monochrome true
+skinparam packageStyle rectangle
+
+actor "Usuario / Browser" as client
+cloud "Auth0\n(Identidad / JWT)" as auth0
+rectangle "printscript-ui\n(Frontend SPA)" as ui
+
+package "Capa de Microservicios Backend" {
+    rectangle "snippetsearcher-app\n(Core / BFF)" as app
+    rectangle "snippetsearcher-runner\n(Execution Engine)" as runner
+    rectangle "snippetsearcher-accessmanager\n(Autorización y Roles)" as access
+}
+
+package "Capa de Datos y Almacenamiento" {
+    database "appdb\n(PostgreSQL 16)" as appdb
+    database "runner-db\n(PostgreSQL 16)" as runnerdb
+    database "accessmanager-db\n(PostgreSQL 16)" as accessdb
+
+    queue "Redis\n(Streams / Message Queue)" as redis
+    rectangle "asset-service\n(API Storage)" as asset
+    database "Azurite\n(Azure Blob Emulator)" as azurite
+}
+
+' Flujos de cliente
+client -right-> auth0 : 1. Autenticación (JWT)
+client --> ui : Usa interfaz web
+
+' Comunicación directa Frontend -> Servicios (sin Nginx)
+ui --> app : Llamadas de negocio, metadatos, CRUD snippets (:19081)
+ui --> runner : Ejecución interactiva y lectura de código (:19082)
+
+' Comunicación entre Microservicios
+app --> access : Consulta permisos síncronos
+access --> accessdb : Persiste roles (owner / shared)
+
+app --> appdb : Persiste metadata y tests
+app --> redis : Encola eventos (job:lint:all, job:format:all)
+
+redis --> runner : Consume eventos en background
+runner --> app : Notifica status de linteo / tests
+runner --> runnerdb : Persiste reglas de usuario
+runner --> asset : Descarga / sube archivos de código
+asset --> azurite : Almacena blobs
+
+@enduml

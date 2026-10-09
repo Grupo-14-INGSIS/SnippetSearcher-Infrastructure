@@ -71,54 +71,132 @@ access --> perms : Persiste permisos
 
 ## 2. El Flujo de un Snippet con la Arquitectura Nueva
 
-La arquitectura nueva introduce **Nginx como Reverse Proxy / API Gateway**, centraliza el flujo en **App (BFF)** y reserva **Redis EXCLUSIVAMENTE como Cola de Mensajería Asíncrona (Queue)** para tareas pesadas y tolerantes a fallos (User Stories #12 y #15).
+La arquitectura del sistema puede analizarse desde dos perspectivas complementarias:
+1. **Vista de Despliegue con Nginx (Producción / Swarm)**: Con Nginx como Edge Gateway perimetral, terminación SSL y balanceo a 2 réplicas.
+2. **Vista Lógica de Microservicios (Sin Nginx)**: Muestra la interacción directa y contratos entre los componentes de negocio.
 
-### Diagrama PlantUML (Arquitectura Nueva Optimizada)
+---
+
+### A. Vista de Producción (Con Nginx Reverse Proxy / Edge Gateway)
+
+![Arquitectura con Nginx](diagramas/arquitectura_con_nginx.png)
+
+*Diagrama fuente:* [`diagramas/arquitectura_con_nginx.puml`](diagramas/arquitectura_con_nginx.puml)
 
 ```plantuml
-@startuml Arquitectura_Nueva_Optimizada
+@startuml Arquitectura_Con_Nginx
 skinparam roundcorner 10
 skinparam defaultTextAlignment center
 skinparam shadowing false
 skinparam monochrome true
+skinparam packageStyle rectangle
 
-cloud "Auth0" as auth0
-actor "Usuario / Browser" as user
+actor "Usuario / Browser" as client
+cloud "Auth0\n(Identidad / JWT)" as auth0
 
-node "Nginx\n(Reverse Proxy / SSL / :80 / :443)" as nginx {
-    rectangle "Frontend Estático\n(printscript-ui)" as ui
+package "Perímetro / Edge Gateway" {
+    rectangle "Nginx Reverse Proxy\n(Puertos :80 / :443 SSL)" as nginx
 }
 
-rectangle "App\n(BFF / Punto Único de API)" as app
-rectangle "Runner\n(Engine Central + Plugins)" as runner
+package "Docker Swarm Stack (snippetsearcher)" {
+    rectangle "printscript-ui\n(Frontend SPA)\n[2 Réplicas]" as ui
+    rectangle "snippetsearcher-app\n(Core / BFF)\n[2 Réplicas]" as app
+    rectangle "snippetsearcher-runner\n(Execution Engine)\n[2 Réplicas]" as runner
+    rectangle "snippetsearcher-accessmanager\n(Autorización y Roles)\n[2 Réplicas]" as access
 
-database "rules\n(SQL normalizada)" as rules
-database "appdb\n(PostgreSQL)" as appdb
+    database "appdb\n(PostgreSQL 16)\n[1 Réplica]" as appdb
+    database "runner-db\n(PostgreSQL 16)\n[1 Réplica]" as runnerdb
+    database "accessmanager-db\n(PostgreSQL 16)\n[1 Réplica]" as accessdb
 
-rectangle "asset-service" as asset
-queue "Redis Streams\n(EXCLUSIVAMENTE QUEUE)" as redis
-rectangle "AccessManager\n(Única fuente de verdad)" as access
-database "permissions" as perms
+    queue "Redis\n(Streams / Message Queue)\n[1 Réplica]" as redis
+    rectangle "asset-service\n(API Storage)\n[1 Réplica]" as asset
+    database "Azurite\n(Azure Blob Emulator)\n[1 Réplica]" as azurite
+}
 
-' 1. Capa Externa y Proxy
-user -right-> auth0 : Autentica
-user --> nginx : HTTPS / Tráfico Unificado
-nginx --> ui : Sirve estáticos (SPA)
-nginx --> app : Proxy inverso /api/*\n(+ X-Request-Id)
+' Flujos de cliente externo
+client -right-> auth0 : 1. Autenticación (JWT)
+client --> nginx : 2. HTTPS (Entrada única)
 
-' 2. Capa de Negocio (BFF Unidireccional)
-app -right-> appdb : Metadata y tests (ON DELETE CASCADE)
-app -left-> runner : 1. Ejecutar snippet / tests\n2. Guardar contenido
-app --> access : Verifica permisos directamente\n(Sin caché, 100% tiempo real)
-access --> perms : Persiste permisos
+' Enrutamiento de Nginx
+nginx --> ui : / (Archivos estáticos)
+nginx --> app : /api/* (API Backend)
+nginx --> runner : /runner/* (Ejecución / Código)
+nginx --> access : /access/* (Permisos)
 
-' 3. Capa de Cómputo y Storage
-runner -left-> rules : Reglas tipadas
-runner --> asset : Única fuente de verdad de código crudo
+' Comunicación interna de microservicios
+app --> access : Consulta permisos (Tiempo real)
+access --> accessdb : Persiste permisos y roles
 
-' 4. Cola Asíncrona (Exclusivamente Message Queue)
-app --> redis : Encola tareas pesadas\n(job:lint:all, job:format:all)
-redis --> runner : Consumer Group (runner_group)\nProcesa en background + ACK
+app --> appdb : Metadata de snippets y tests
+app --> redis : Encola tareas asíncronas (job:lint:all, job:format:all)
+
+redis --> runner : Consumer Group (Procesa en background)
+runner --> app : Actualiza estado / linteo (PATCH)
+runner --> runnerdb : Reglas de formateo y linteo
+runner --> asset : Lectura y guardado de código fuente
+asset --> azurite : Persistencia de blobs
+
+@enduml
+```
+
+---
+
+### B. Vista Lógica de Componentes (Sin Nginx)
+
+Esta vista abstrae el gateway perimetral para evidenciar la interacción directa entre el cliente web, los microservicios backend y las bases de datos:
+
+![Arquitectura sin Nginx](diagramas/arquitectura_sin_nginx.png)
+
+*Diagrama fuente:* [`diagramas/arquitectura_sin_nginx.puml`](diagramas/arquitectura_sin_nginx.puml)
+
+```plantuml
+@startuml Arquitectura_Sin_Nginx
+skinparam roundcorner 10
+skinparam defaultTextAlignment center
+skinparam shadowing false
+skinparam monochrome true
+skinparam packageStyle rectangle
+
+actor "Usuario / Browser" as client
+cloud "Auth0\n(Identidad / JWT)" as auth0
+rectangle "printscript-ui\n(Frontend SPA)" as ui
+
+package "Capa de Microservicios Backend" {
+    rectangle "snippetsearcher-app\n(Core / BFF)" as app
+    rectangle "snippetsearcher-runner\n(Execution Engine)" as runner
+    rectangle "snippetsearcher-accessmanager\n(Autorización y Roles)" as access
+}
+
+package "Capa de Datos y Almacenamiento" {
+    database "appdb\n(PostgreSQL 16)" as appdb
+    database "runner-db\n(PostgreSQL 16)" as runnerdb
+    database "accessmanager-db\n(PostgreSQL 16)" as accessdb
+
+    queue "Redis\n(Streams / Message Queue)" as redis
+    rectangle "asset-service\n(API Storage)" as asset
+    database "Azurite\n(Azure Blob Emulator)" as azurite
+}
+
+' Flujos de cliente
+client -right-> auth0 : 1. Autenticación (JWT)
+client --> ui : Usa interfaz web
+
+' Comunicación directa Frontend -> Servicios (sin Nginx)
+ui --> app : Llamadas de negocio, metadatos, CRUD snippets (:19081)
+ui --> runner : Ejecución interactiva y lectura de código (:19082)
+
+' Comunicación entre Microservicios
+app --> access : Consulta permisos síncronos
+access --> accessdb : Persiste roles (owner / shared)
+
+app --> appdb : Persiste metadata y tests
+app --> redis : Encola eventos (job:lint:all, job:format:all)
+
+redis --> runner : Consume eventos en background
+runner --> app : Notifica status de linteo / tests
+runner --> runnerdb : Persiste reglas de usuario
+runner --> asset : Descarga / sube archivos de código
+asset --> azurite : Almacena blobs
 
 @enduml
 ```
