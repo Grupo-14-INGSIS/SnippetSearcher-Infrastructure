@@ -257,7 +257,11 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: on-failure
+        # "any" y no "on-failure": al apagar la VM nginx recibe SIGQUIT y sale con 0
+        # ("Complete"); con on-failure Swarm no lo vuelve a levantar al reiniciar y
+        # el sitio queda en ERR_CONNECTION_REFUSED aunque el resto del stack este up.
+        condition: any
+        delay: 5s
 
 # -------------------------------------------------------------
 # Volúmenes Persistentes
