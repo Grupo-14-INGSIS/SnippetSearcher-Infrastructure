@@ -264,3 +264,21 @@ Gracias al patrón Strategy y al Engine Central, agregar un lenguaje solo requie
    Agregar `RUN apt-get update && apt-get install -y python3 python3-pip && pip install black flake8`.
 3. **Cero cambios en el resto del sistema**:
    `App`, `AccessManager`, `AssetService` y `PostgreSQL` no requieren modificaciones. Solo se agrega el lenguaje en el selector de la UI.
+
+---
+
+## 6. Estándares de Ingeniería de Código y Convenciones Gradle
+Para garantizar calidad homogénea y evitar duplicación entre los microservicios backend (`App`, `AccessManager`, `Runner`):
+* **Convention Plugin (`myPlugin`)**: Implementado en `buildSrc/` en cada microservicio, centralizando la configuración de Kotlin, Ktlint, Detekt y JaCoCo. Al compilar emite `>>>>> myPlugin is working <<<<<`.
+* **Formateo y Linteo**: Reglas unificadas vía [`.editorconfig`](file:///C:/Users/laris/Downloads/Ingsis/SnippetSearcher-Runner/.editorconfig) (Ktlint) y [`config/detekt/detekt.yml`](file:///C:/Users/laris/Downloads/Ingsis/SnippetSearcher-Runner/config/detekt/detekt.yml) (Detekt 1.23.8), heredadas directamente de PrintScript.
+* **Pre-commit Hook**: Script [`.githooks/pre-commit`](file:///C:/Users/laris/Downloads/Ingsis/SnippetSearcher-Runner/.githooks/pre-commit) y tarea `installGitHook` que bloquea commits que incumplan formato, linteo, pruebas unitarias o cobertura.
+* **Verificación en CI/CD**: Pasos remotos idénticos en `.github/workflows/ci-cd.yml` de cada microservicio previo a la construcción de contenedores Docker.
+* Para el detalle exhaustivo, consultar [Calidad, Linter, Formateador y CI/CD](CALIDAD_LINTER_FORMATTER_CI.md).
+
+---
+
+## 7. Estrategia de Versionado y Tags en Docker Registry (GHCR)
+Para balancear la automatización de despliegues y la trazabilidad inmutable:
+* **Doble Tagging en CI/CD**: Cada imagen se publica con su tag de ambiente flotante (`:develop` o `:production`) para el despliegue automático en Swarm, y con un tag inmutable con el SHA del commit (`:<rama>-<commit>`).
+* **Trazabilidad y Rollbacks**: Los tags con commit generan enlaces directos al commit en la interfaz de GitHub Packages y permiten rollbacks inmediatos a versiones exactas.
+* Para el detalle exhaustivo, consultar [Estrategia de Tags Docker](ESTRATEGIA_TAGS_DOCKER.md).

@@ -7,12 +7,14 @@ Repositorio central de infraestructura, orquestación y despliegue continuo (CI/
 ## 1. Índice de Documentación Técnica
 
 Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`Documentación/`](./Documentación/):
-* **[Arquitectura General](Documentación/ARQUITECTURA.md)**: Justificación técnica de microservicios, bases de datos PostgreSQL, Redis Streams, Nginx y New Relic.
-* **[Dockerización y Docker Compose](Documentación/DOCKERIZACION.md)**: Explicación de los Dockerfiles Multi-stage, imágenes publicadas en GHCR y ejecución local con Docker Compose.
-* **[Docker Swarm y Ambientes](Documentación/SWARM_Y_AMBIENTES.md)**: Configuración de Stacks en Swarm, 2 réplicas stateless, balanceo interno IPVS, rolling updates y estrategia de branching (`develop` y `production`).
-* **[Flujo de un Snippet y Comparativa](Documentación/FLUJO_Y_COMPARATIVA_ARQUITECTURA.md)**: Diagramas PlantUML de secuencia, Nginx como Reverse Proxy y Redis exclusivamente como Message Queue.
-* **[Catálogo de Rutas REST](Documentación/RUTAS_REST.md)**: Especificación técnica de endpoints RESTful.
-* **[Checklist de Producción](PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
+* **[Arquitectura General](ARQUITECTURA.md)**: Justificación técnica de microservicios, bases de datos PostgreSQL, Redis Streams, Nginx y New Relic.
+* **[Dockerización y Docker Compose](DOCKERIZACION.md)**: Explicación de los Dockerfiles Multi-stage, imágenes publicadas en GHCR y ejecución local con Docker Compose.
+* **[Docker Swarm y Ambientes](SWARM_Y_AMBIENTES.md)**: Configuración de Stacks en Swarm, 2 réplicas stateless, balanceo interno IPVS, rolling updates y estrategia de branching (`develop` y `production`).
+* **[Flujo de un Snippet y Comparativa](FLUJO_Y_COMPARATIVA_ARQUITECTURA.md)**: Diagramas PlantUML de secuencia, Nginx como Reverse Proxy y Redis exclusivamente como Message Queue.
+* **[Catálogo de Rutas REST](RUTAS_REST.md)**: Especificación técnica de endpoints RESTful.
+* **[Calidad, Linter, Formateador y CI/CD](CALIDAD_LINTER_FORMATTER_CI.md)**: Estándares de código heredados de PrintScript, plugins `myPlugin`, Ktlint, Detekt, JaCoCo y Git hooks.
+* **[Estrategia de Tags Docker](ESTRATEGIA_TAGS_DOCKER.md)**: Estrategia de doble etiquetado (`:rama` y `:<rama>-<commit>`), trazabilidad, rollbacks y compatibilidad con Swarm.
+* **[Checklist de Producción](../PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
 
 ---
 
@@ -94,4 +96,4 @@ Para descargarlas manualmente desde una terminal con Docker:
 ```bash
 echo "<GITHUB_TOKEN_O_PAT>" | docker login ghcr.io -u <GITHUB_USER> --password-stdin
 docker pull ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop
-```
+```
