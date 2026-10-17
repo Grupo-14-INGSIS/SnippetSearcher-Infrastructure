@@ -8,6 +8,13 @@ on:
   repository_dispatch:
     types: [new-image-ready]
 
+# Un grupo por servicio: si se agrupa solo por ambiente, GitHub cancela ("superseded") los
+# runs pendientes cuando llegan varios dispatches seguidos (app, runner y ui a la vez) y
+# alguno de los servicios queda sin actualizar en la VM.
+concurrency:
+  group: deploy-${{ github.event.client_payload.environment }}-${{ github.event.client_payload.service }}
+  cancel-in-progress: false
+
 jobs:
   update:
     name: Deploy to ${{ github.event.client_payload.environment }}
@@ -33,27 +40,69 @@ jobs:
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          SERVICE_NAME: ${{ steps.payload.outputs.service }}
-          GITHUB_TOKEN: ${{ secrets.PAT }}
-          USER: ${{ secrets.GHCR_USER }}
-          ENV_NAME: ${{ steps.validate.outputs.environment }}
-          VM_DIRECTORY: ${{ secrets.SSH_DIRECTORY || 'SnippetSearcher-Infrastructure' }}
+          SERVICE_NAME: ${{ steps.payload.outputs.service_name }}
+          GHCR_PAT: ${{ secrets.PAT }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          ENV_NAME: ${{ steps.payload.outputs.environment_name }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GITHUB_TOKEN,SERVICE_NAME,ENV_NAME,USER,VM_DIRECTORY
+          envs: GHCR_PAT,GHCR_USER,SERVICE_NAME,ENV_NAME
+          # El service update espera a que las réplicas nuevas pasen el healthcheck
+          command_timeout: 20m
           script: |
             set -e
-            
-            cd $VM_DIRECTORY
-            
-            echo "$GITHUB_TOKEN" | docker login ghcr.io -u $USER --password-stdin
+            cd ~
 
-            docker compose pull $SERVICE_NAME
+            # Un deploy a la vez en la VM: los de cada servicio corren en paralelo en Actions
+            # y el `docker image prune` de uno puede borrar capas que otro está extrayendo
+            # (falla con "failed to Lchown ... no such file or directory").
+            exec 9>/tmp/snippetsearcher-deploy.lock
+            echo "--- Waiting for deploy lock ---"
+            flock -w 900 9
 
-            docker compose up -d --no-deps --force-recreate $SERVICE_NAME
+            # Cargar variables del host si existen
+            if [ -f .env ]; then
+              set -a
+              source .env 2>/dev/null || true
+              set +a
+            fi
+
+            LOGIN_TOKEN="${GITHUB_TOKEN:-$GHCR_PAT}"
+            LOGIN_USER="${GHCR_USER}"
+
+            echo "--- Logging into GHCR ---"
+            echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
+
+            # Actualizar quirúrgicamente solo este servicio en Docker Swarm
+            # La imagen nueva se descarga y se aplica rolling update a las réplicas
+            # Mapear nombres si difieren entre el servicio Swarm y el paquete GHCR
+            IMAGE_REPO="$SERVICE_NAME"
+            if [ "$SERVICE_NAME" = "snippetsearcher-ui" ]; then
+              IMAGE_REPO="printscript-ui"
+            fi
+
+            IMAGE_URI="ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${ENV_NAME}"
+            SWARM_SERVICE="snippetsearcher_${SERVICE_NAME}"
+
+            # Bajar la imagen y actualizar el servicio pineando el DIGEST, no el tag.
+            # Si se pasa solo el tag y la resolucion contra el registry falla o llega
+            # antes de que termine el push, Swarm reutiliza la imagen cacheada en el
+            # nodo y las replicas quedan con la version vieja aunque el run sea verde.
+            echo "--- Pulling ${IMAGE_URI} ---"
+            for attempt in 1 2 3; do
+              if docker pull "$IMAGE_URI"; then break; fi
+              if [ "$attempt" = 3 ]; then echo "Pull failed 3 times"; exit 1; fi
+              echo "Pull failed (attempt $attempt), retrying in 15s..."
+              sleep 15
+            done
+            IMAGE_DIGEST="$(docker image inspect "$IMAGE_URI" --format '{{index .RepoDigests 0}}')"
+            echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_DIGEST} ---"
+            docker service update --with-registry-auth --image "$IMAGE_DIGEST" "$SWARM_SERVICE"
+
+            # Limpiar imágenes viejas
+            docker image prune -f || true
             
-            docker image prune -f
-            
-            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            # Verificar el estado de las réplicas del servicio actualizado
+            docker service ps "$SWARM_SERVICE"

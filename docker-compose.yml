@@ -1,18 +1,14 @@
-# App: 19081
-# Runner: 19082
-# AccessManager: 19083
-# Asset-Service: 19084
-# UI: 19085
-# Redis: 6379
-
-# App
 services:
+  # App
   snippetsearcher-app:
     container_name: "snippetsearcher-app"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG}
+    restart: unless-stopped
+    build: ../SnippetSearcher-App
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-develop}
     ports:
       - "19081:8080"
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       DB_USER: app
       DB_PASSWORD: app
@@ -33,11 +29,12 @@ services:
       snippetsearcher-accessmanager:
         condition: service_started
       snippetsearcher-runner:
-        condition: service_healthy
+        condition: service_started
     networks:
       - reverse-proxy-network
 
   appdb:
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: app
@@ -56,6 +53,7 @@ services:
 
   redis:
     container_name: "redis"
+    restart: unless-stopped
     image: redis:7
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
@@ -67,18 +65,20 @@ services:
     networks:
       - reverse-proxy-network
 
-# Runner
+  # Runner
   snippetsearcher-runner:
     container_name: "snippetsearcher-runner"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG}
+    restart: unless-stopped
+    build:
+      context: ../SnippetSearcher-Runner
+      args:
+        GITHUB_USER: EmmaBeni
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-develop}
     ports:
       - "19082:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       DB_USER: app
       DB_PASSWORD: app
       DB_NAME: snippet-db
@@ -98,6 +98,7 @@ services:
 
   runner-db:
     container_name: "runner-db"
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: app
@@ -111,6 +112,7 @@ services:
 
   asset-service:
     container_name: "asset-service"
+    restart: unless-stopped
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
     ports:
       - "19084:8080"
@@ -123,6 +125,7 @@ services:
 
   azurite:
     container_name: "azurite"
+    restart: unless-stopped
     image: mcr.microsoft.com/azure-storage/azurite
     ports:
       - "10000:10000"
@@ -136,10 +139,13 @@ services:
   # AccessManager
   snippetsearcher-accessmanager:
     container_name: "snippetsearcher-accessmanager"
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG}
+    restart: unless-stopped
+    build: ../SnippetSearcher-AccessManager
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-develop}
     ports:
       - "19083:8080"
     environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       DB_USER: access_manager
       DB_PASSWORD: access_manager
       DB_NAME: compose-db
@@ -152,6 +158,7 @@ services:
 
   accessmanager-db:
     container_name: "accessmanager-db"
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: access_manager
@@ -163,10 +170,24 @@ services:
     networks:
       - reverse-proxy-network
 
-# UI
+  # UI
   snippetsearcher-ui:
     container_name: "snippetsearcher-ui"
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG}
+    restart: unless-stopped
+    build:
+      context: ../printscript-ui
+      args:
+        - VITE_AUTH0_DOMAIN=dev-65tlgyzfpbzeka8a.us.auth0.com
+        - VITE_AUTH0_CLIENT_ID=pDaLfxwVAerUnhjKfJNfxLfduUPJQi3x
+        - VITE_AUTH0_AUDIENCE=https://api.snippets.com
+        - VITE_AUTH0_REALM=User-Pass-Auth
+        - VITE_FRONTEND_URL=http://localhost:5173
+        - VITE_API_URL=http://localhost:19081
+        - VITE_BACKEND_URL=http://localhost:19081
+        - VITE_RUNNER_URL=http://localhost:19082
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
+    ports:
+      - "5173:80"
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
@@ -178,20 +199,26 @@ services:
       - VITE_AUTH0_AUDIENCE=https://api.snippets.com
       - VITE_AUTH0_REALM=Username-Password-Authentication
 
+      - VITE_FRONTEND_URL=http://localhost:5173
+      - VITE_API_URL=http://localhost:19081
+      - VITE_BACKEND_URL=http://localhost:19081
+      - VITE_RUNNER_URL=http://localhost:19082
+
     depends_on:
       - snippetsearcher-runner
     networks:
       - reverse-proxy-network
 
-
+  # Reverse Proxy (Nginx)
   reverse-proxy:
     image: nginx:alpine
     container_name: reverse-proxy
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     environment:
-      - DOMAIN_NAME=${DOMAIN_NAME}
+      - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
     volumes:
       - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
