@@ -6,7 +6,7 @@
 - [3. CI/CD de cada microservicio](#3-cicd-de-cada-microservicio)
 - [4. Dispatch a Infra](#4-dispatch-a-infra)
 - [5. update_service.yml: actualizar un servicio](#5-update_serviceyml-actualizar-un-servicio)
-- [6. deploy.yml: desplegar el stack y reconciliar](#6-deployyml-desplegar-el-stack-y-reconciliar)
+- [6. deploy.yml: desplegar el stack](#6-deployyml-desplegar-el-stack)
 - [7. Secrets, variables y environments](#7-secrets-variables-y-environments)
 - [8. Qué pasa en la VM: Swarm](#8-qué-pasa-en-la-vm-swarm)
 - [9. Qué pasa cuando algo falla](#9-qué-pasa-cuando-algo-falla)
@@ -34,9 +34,9 @@
                                    ▼
  VM (Swarm manager): rolling update, healthcheck, rollback si la versión nueva no arranca
 
- push a Infra (docker-stack.yml, nginx, db, deploy.yml)  ─┐
- cron cada 10 min (reconciliación)                        ├─▶ deploy.yml: docker stack deploy (todo el stack)
- Run workflow (manual)                                    ─┘
+ push a Infra (develop o main)  ─┐
+                                 ├─▶ deploy.yml: docker stack deploy (todo el stack)
+ Run workflow (manual)          ─┘
 ```
 
 Dos caminos llegan a la VM y los dos son **desde GitHub Actions**: la VM no corre ningún script ni guarda
@@ -44,9 +44,10 @@ archivos del proyecto (ver [VM_LIMPIA.md](VM_LIMPIA.md)).
 
 | Camino | Disparador | Qué actualiza | Velocidad |
 | :--- | :--- | :--- | :--- |
-| `update_service.yml` | Un microservicio publicó imagen nueva | **Un** servicio | Al instante |
-| `deploy.yml` (push) | Cambió el stack, nginx o los SQL de Infra | **Todo** el stack | Al instante |
-| `deploy.yml` (cron) | Cada 10 min | Lo que esté desactualizado (por ej. si la VM estaba apagada) | ≤ 10 min |
+| `update_service.yml` | Push a un microservicio (`develop` / `production`) | **Ese** servicio | Al instante |
+| `deploy.yml` | Push a Infra (`develop` / `main`), o *Run workflow* | **Todo** el stack (solo cambia lo que difiere) | Al instante |
+
+No hay deploys automáticos sin un push: si la VM estaba apagada, al prenderla se corre *Deploy Stack* a mano.
 
 ---
 
@@ -163,8 +164,7 @@ La concurrencia también usa los dos campos (`deploy-<environment>-<service>`): 
 y ambiente, sin que el de un servicio cancele el de otro.
 
 `deploy.yml` no necesita esto: no actualiza un servicio sino **todo el stack**, y el ambiente sale de la
-**rama de Infra** que se pusheó (`develop` → VM de dev, `main` → VM de prod con imágenes `:production`), o de
-los dos si es el cron.
+**rama de Infra** que se pusheó (`develop` → VM de dev, `main` → VM de prod con imágenes `:production`).
 
 ---
 
@@ -193,37 +193,36 @@ vez) y algún servicio quedaría sin actualizar.
 
 ---
 
-## 6. `deploy.yml`: desplegar el stack y reconciliar
+## 6. `deploy.yml`: desplegar el stack
 
 Disparadores:
-- `push` a `develop` o `main` que toque `docker-stack.yml`, `reverse-proxy/**`, `db/**` o el propio `deploy.yml`.
-  Un cambio de docs no redeploya.
-- `schedule` cada 10 minutos.
-- `workflow_dispatch` (botón *Run workflow*).
+- `push` a `develop` o `main` (cualquier archivo de Infra).
+- `workflow_dispatch` (botón *Run workflow*): para redeployar a mano, por ejemplo al prender la VM.
+
+`environment` = `develop` para la rama `develop`, `production` para `main`. Sobre otra rama el job no corre.
 
 | Paso | Qué hace |
 | :--- | :--- |
-| `targets` | Elige qué ramas desplegar: el cron, `develop` y `main`; un push o run manual, solo su rama (otra rama falla). |
-| `deploy` (matrix por rama) | Un job por rama, con `environment` = `develop` o `production` |
-| Check VM | Prueba el puerto 22. En el cron, si no responde, termina sin error ("¿apagada?"). En un push, falla. |
 | SSH | Escribe la clave (`SSH_PRIVATE_KEY`), agrega la VM a `known_hosts` y define `DOCKER_HOST=ssh://vm`. |
 | Login GHCR | En el runner, con `PAT`. |
 | Hash de configs | Calcula el hash de `app.conf` y de los SQL (los configs de Swarm son inmutables; ver VM_LIMPIA). |
 | Deploy | `docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml snippetsearcher` |
-| Limpieza | Borra configs viejos que nadie usa; en el cron, también imágenes sin uso. |
+| Limpieza | Borra configs viejos que nadie usa e imágenes sin uso. |
 
-**Por qué el cron no reinicia nada si no hay cambios.** `docker stack deploy` compara la especificación nueva
-con la que corre. Con `--resolve-image always` traduce cada tag a su digest actual: si es el mismo y los
-configs tienen el mismo nombre (mismo hash), no hay diferencia y no se toca ningún servicio. Si un tag
-apunta a una imagen nueva, actualiza solo ese servicio.
+**Un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
+la que corre. Con `--resolve-image always` traduce cada tag a su digest actual: si es el mismo y los configs
+tienen el mismo nombre (mismo hash), no hay diferencia y no se toca ningún servicio. Por eso no hace falta
+filtrar qué archivos dispararon el push: uno de docs termina sin cambios. Antes el script forzaba
+`docker service update --force` de todos los servicios y cada push de Infra eran ~4 minutos de 502.
 
-**Por qué la VM se pone al día al prenderse.** Si se pushea con la VM apagada, el dispatch falla y nadie lo
-reintenta. Al prender, Swarm levanta lo que tenía, y el siguiente cron resuelve los tags y trae lo que faltaba.
+**VM apagada.** Si se pushea (a Infra o a un microservicio) con la VM apagada, el job falla con `i/o timeout`
+y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía; para traer lo último: *Actions → Deploy Stack →
+Run workflow* sobre `develop` (dev) o `main` (prod). Como `--resolve-image always` trae el digest actual de cada
+tag, ese único run pone al día todos los servicios, también los que vinieron por dispatch.
 
-**El cron corre desde la rama por defecto (`main`).** Hasta que `deploy.yml` esté en `main`, no hay
-reconciliación (tampoco para dev). GitHub desactiva los crons de un repo público tras 60 días sin actividad.
-
-**Concurrencia**: `stack-<rama>`. Un deploy del stack a la vez por ambiente; el cron no se pisa con un push.
+**Concurrencia**: `stack-<rama>`, un deploy del stack a la vez por ambiente. No comparte grupo con
+`update_service.yml`: si los dos corren a la vez, el `docker image prune` del final podría borrar capas que el
+otro está bajando (es raro: los pushes a Infra son poco frecuentes).
 
 ---
 
@@ -279,7 +278,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | Falla | Qué se ve | Qué hacer |
 | :--- | :--- | :--- |
 | Lint, detekt, tests o cobertura | El job `ci-cd` del microservicio en rojo | Arreglar y pushear. No se publicó imagen. |
-| VM apagada durante un dispatch | `update_service.yml` en rojo (`i/o timeout` en el puerto 22) | Prender la VM: el cron la pone al día en ≤ 10 min (con `deploy.yml` en `main`), o *Run workflow* de *Deploy Stack*. |
+| VM apagada durante un push | `update_service.yml` o `deploy.yml` en rojo (`i/o timeout` en el puerto 22) | Prender la VM y correr *Actions → Deploy Stack → Run workflow* (rama `develop` o `main`). |
 | La IP de la VM cambió | `i/o timeout` aunque la VM esté prendida | Actualizar `SSH_HOST` en el environment y DuckDNS; poner la IP como estática en Azure. |
 | La versión nueva no arranca | `docker service update` tarda y termina en rollback | La VM sigue con la versión anterior. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
 | Falta `DOMAIN_NAME` | `deploy.yml` falla con *"DOMAIN_NAME es obligatorio"* | Cargar la variable en el environment. No se tocó nada. |
@@ -307,9 +306,9 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
    propio repo.
 3. **¿Por qué se pinea el digest?** Para que Swarm baje exactamente la imagen recién publicada y no reutilice
    una cacheada con el mismo tag.
-4. **¿Qué pasa si pusheo con la VM apagada?** El dispatch falla; al prenderla, el cron de `deploy.yml` trae
-   las imágenes nuevas en ≤ 10 minutos.
-5. **¿Por qué el cron no reinicia todo cada 10 minutos?** `docker stack deploy` solo actualiza servicios cuya
+4. **¿Qué pasa si pusheo con la VM apagada?** El deploy falla y nadie lo reintenta. Al prenderla, *Run
+   workflow* de *Deploy Stack* trae lo último de todos los servicios.
+5. **¿Por qué un push de docs a Infra no reinicia nada?** `docker stack deploy` solo actualiza servicios cuya
    especificación cambió (digest de imagen o nombre de config).
 6. **¿Por qué el tag de prod es `:production` si la rama de prod de Infra es `main`?** El tag es la rama del
    microservicio, y en los microservicios la rama de prod es `production`.

@@ -32,18 +32,14 @@ se leen en el runner y viajan por la API: no se copia nada a disco en la VM.
 servicio se actualiza; si no cambia, el nombre es el mismo y no se reinicia nada. Los viejos se borran al
 final de cada deploy (`docker config rm` no puede borrar los que están en uso).
 
-## Deploy automático al prender la VM (sin scripts en la VM)
-`deploy.yml` corre también **cada 10 minutos** (`schedule`). `docker stack deploy --resolve-image always`
-resuelve cada tag (`develop`, `production`) a su digest actual en GHCR y solo actualiza los servicios cuya imagen
-cambió. Es idempotente: si no cambió nada, no reinicia nada.
-
-- VM apagada → el job ve que el puerto 22 no responde y termina sin error.
-- Se prende la VM → Swarm levanta lo que tenía y, en ≤ 10 min, el cron trae lo que se pusheó mientras estaba apagada.
-- El cron corre desde la rama por defecto (`main`): **se activa recién cuando `deploy.yml` está en `main`**.
-  GitHub desactiva los crons de un repo público tras 60 días sin actividad.
-
-`update_service.yml` (dispatch de cada microservicio) sigue actualizando un servicio al instante, también por
-`DOCKER_HOST`, pineando el digest de la imagen.
+## Cuándo se despliega
+- **Push a Infra** (`develop` o `main`) → `deploy.yml` despliega **todo el stack**. `docker stack deploy
+  --resolve-image always` resuelve cada tag (`develop`, `production`) a su digest actual y solo actualiza los
+  servicios cuya especificación cambió: un push que no cambia el stack no reinicia nada.
+- **Push a un microservicio** (`develop` o `production`) → `update_service.yml` actualiza **solo ese servicio**,
+  también por `DOCKER_HOST`, pineando el digest de la imagen.
+- **VM apagada durante un push**: el deploy falla y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía
+  y, para traer lo último, *Actions → Deploy Stack → Run workflow* sobre `develop` o `main`.
 
 ## Cómo se elige el environment y de dónde salen los valores
 
@@ -52,18 +48,15 @@ job, y con él los `vars.*` y `secrets.*` que ve.
 
 **`deploy.yml`**
 ```yaml
-targets:                    # 1. qué ramas se despliegan
-  run: |
-    schedule          -> ["develop","main"]      (el cron reconcilia los dos ambientes)
-    push / dispatch   -> ["<rama pusheada>"]     (solo develop o main; otra rama falla)
+on:
+  push: { branches: [main, develop] }       # 1. la rama pusheada es el ambiente
+  workflow_dispatch:                        #    (o la elegida en Run workflow)
 
 deploy:
-  strategy:
-    matrix:
-      branch: ${{ fromJson(needs.targets.outputs.branches) }}             # un job por rama
-  environment: ${{ matrix.branch == 'main' && 'production' || 'develop' }} # 2. la rama elige el environment
-  env:                                                                     # 3. valores de ESE environment
-    IMAGE_TAG: ${{ matrix.branch == 'main' && 'production' || 'develop' }}  # tag de las imágenes
+  if: github.ref_name == 'develop' || github.ref_name == 'main'
+  environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}   # 2. la rama elige el environment
+  env:                                                                         # 3. valores de ESE environment
+    IMAGE_TAG: ${{ github.ref_name == 'main' && 'production' || 'develop' }}   # tag de las imágenes
     DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
     NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
     ...
@@ -129,7 +122,7 @@ pisaban los valores por defecto. Ahora el lugar para cambiarlos es GitHub, no la
    ```bash
    rm -rf ~/.env ~/docker-stack.yml ~/reverse-proxy ~/db ~/.docker/config.json
    ```
-8. **Producción**: merge a `main` y repetir 4 a 7 en la VM de prod. Con `deploy.yml` en `main` se activa el cron.
+8. **Producción**: merge a `main` y repetir 4 a 7 en la VM de prod.
 
 ## Opcional: contraseñas como secrets de Swarm
 El repo es público y `docker-stack.yml` tiene las contraseñas de las bases en texto plano. Para sacarlas:

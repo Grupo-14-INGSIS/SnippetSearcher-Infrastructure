@@ -1,95 +1,52 @@
 name: Deploy Stack
 
-# Despliega el stack de Swarm desde el runner de Actions contra el Docker de la VM por SSH
-# (DOCKER_HOST=ssh://...). docker-stack.yml, la config de nginx y los SQL de init se leen del
-# checkout y viajan por la API de Docker: a la VM no se le copia ningún archivo y no necesita
-# ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
+# Despliega el stack completo de Swarm cuando hay un push a Infra. Corre desde el runner de Actions
+# contra el Docker de la VM por SSH (DOCKER_HOST=ssh://...): docker-stack.yml, la config de nginx y
+# los SQL de init se leen del checkout y viajan por la API de Docker. A la VM no se le copia ningún
+# archivo y no necesita ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
 #
-# Además corre cada 10 minutos (reconciliación): `docker stack deploy` resuelve cada tag
-# (develop / production) a su digest actual y solo actualiza los servicios cuya imagen cambió. Si la
-# VM estuvo apagada mientras se pusheaba, al prenderla queda al día en <= 10 min. Si no cambió
-# nada, no reinicia nada. Si la VM está apagada, el job termina sin error.
+# Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag (develop / production)
+# a su digest actual y solo actualiza los servicios cuya especificación cambió. Un push que no cambia
+# el stack (por ejemplo, de docs) no reinicia nada.
+#
+# Si se pusheó con la VM apagada: al prenderla, Actions -> Deploy Stack -> Run workflow (rama
+# develop o main) trae todo lo último.
 
 on:
   push:
     branches:
       - main
       - develop
-    # Solo cuando cambia algo que usa el stack: un cambio de docs no debe redeployar
-    paths:
-      - docker-stack.yml
-      - reverse-proxy/**
-      - db/**
-      - .github/workflows/deploy.yml
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  targets:
-    runs-on: ubuntu-latest
-    outputs:
-      branches: ${{ steps.pick.outputs.branches }}
-    steps:
-      - id: pick
-        # El cron corre sobre la rama por defecto: reconcilia los dos ambientes.
-        # Un push o un run manual despliega solo su rama.
-        run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo 'branches=["develop","main"]' >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref_name }}" = "develop" ] || [ "${{ github.ref_name }}" = "main" ]; then
-            echo 'branches=["${{ github.ref_name }}"]' >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Solo se despliegan develop (dev) y main (prod), no ${{ github.ref_name }}"
-            exit 1
-          fi
-
   deploy:
-    needs: targets
-    name: Deploy ${{ matrix.branch }}
+    name: Deploy ${{ github.ref_name }}
+    # Solo develop (dev) y main (prod); un run manual sobre otra rama no hace nada
+    if: github.ref_name == 'develop' || github.ref_name == 'main'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        branch: ${{ fromJson(needs.targets.outputs.branches) }}
-    environment: ${{ matrix.branch == 'main' && 'production' || 'develop' }}
-    # Un deploy del stack a la vez por ambiente (el cron no se pisa con un push)
+    environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
+    # Un deploy del stack a la vez por ambiente
     concurrency:
-      group: stack-${{ matrix.branch }}
+      group: stack-${{ github.ref_name }}
       cancel-in-progress: false
     env:
       STACK: snippetsearcher
       # Las ramas de Infra (develop / main) no se llaman igual que las de los microservicios
       # (develop / production): las imágenes de prod se publican como :production, no :main.
-      IMAGE_TAG: ${{ matrix.branch == 'main' && 'production' || 'develop' }}
+      IMAGE_TAG: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
       DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
       NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
       NEW_RELIC_APP_NAME_RUNNER: ${{ vars.NEW_RELIC_APP_NAME_RUNNER }}
       NEW_RELIC_APP_NAME_ACCESS: ${{ vars.NEW_RELIC_APP_NAME_ACCESS }}
     steps:
-      - name: Checkout ${{ matrix.branch }}
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.branch }}
-
-      - name: Check that the VM is reachable
-        id: vm
-        run: |
-          if timeout 10 bash -c "</dev/tcp/${{ secrets.SSH_HOST }}/22" 2>/dev/null; then
-            echo "up=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "::notice::La VM de ${{ matrix.branch }} no responde (¿apagada?): se reintenta en el próximo cron"
-            echo "up=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::La VM no responde en ${{ secrets.SSH_HOST }}:22"
-            exit 1
-          fi
 
       - name: Set up SSH to the VM
-        if: steps.vm.outputs.up == 'true'
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_vm && chmod 600 ~/.ssh/id_vm
@@ -99,16 +56,15 @@ jobs:
             HostName ${{ secrets.SSH_HOST }}
             User ${{ secrets.SSH_USER }}
             IdentityFile ~/.ssh/id_vm
+            ConnectTimeout 15
             ServerAliveInterval 30
           EOF
           echo "DOCKER_HOST=ssh://vm" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR (on the runner)
-        if: steps.vm.outputs.up == 'true'
         run: echo "${{ secrets.PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
 
       - name: Hash configs (a config of Swarm cannot be modified, so its name carries the content hash)
-        if: steps.vm.outputs.up == 'true'
         run: |
           h() { sha256sum "$1" | cut -c1-12; }
           {
@@ -118,20 +74,15 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Deploy stack
-        if: steps.vm.outputs.up == 'true'
         run: |
           docker info --format 'Swarm: {{.Swarm.LocalNodeState}} en {{.Name}}'
-          # --resolve-image always: cada tag se resuelve a su digest actual en GHCR; si no cambió, no hay update
           docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml "$STACK"
 
       - name: Clean up unused configs and images
-        if: steps.vm.outputs.up == 'true'
         run: |
           # Los configs en uso no se pueden borrar: solo se van los de versiones anteriores
           docker config ls --filter "label=com.docker.stack.namespace=$STACK" -q | xargs -r docker config rm 2>/dev/null || true
-          # Solo en el cron: en un push podría correr a la vez que el pull de update_service.yml
-          if [ "${{ github.event_name }}" = "schedule" ]; then docker image prune -f || true; fi
+          docker image prune -f || true
 
       - name: Stack status
-        if: steps.vm.outputs.up == 'true'
         run: docker stack services "$STACK"
