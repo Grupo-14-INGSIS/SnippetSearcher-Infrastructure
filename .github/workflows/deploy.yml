@@ -95,7 +95,8 @@ jobs:
           while :; do
             missing=""
             for svc in "${!want[@]}"; do
-              running="$(docker service ps "${STACK}_${svc}" --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
+              # --no-trunc: sin él, docker service ps recorta el digest de la imagen y nunca coincidiría
+              running="$(docker service ps "${STACK}_${svc}" --no-trunc --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
               total="$(echo "$running" | grep -c . || true)"
               ok="$(echo "$running" | grep -F "${want[$svc]}" | grep -c '^.* Running' || true)"
               [ "$total" -gt 0 ] && [ "$ok" = "$total" ] || missing="$missing $svc"
