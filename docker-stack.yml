@@ -68,7 +68,10 @@ services:
       POSTGRES_DB: appdb
     volumes:
       - app-pgdata:/var/lib/postgresql/data
-      - ./db/app-init:/docker-entrypoint-initdb.d:ro
+    # Script de init como config de Swarm (no bind mount): no necesita archivos en la VM
+    configs:
+      - source: app_init_sql
+        target: /docker-entrypoint-initdb.d/01-init-snippet.sql
     deploy:
       replicas: 1
       restart_policy:
@@ -127,7 +130,7 @@ services:
       POSTGRES_DB: snippet-db
     volumes:
       - runner-pgdata:/var/lib/postgresql/data
-      - ./db/runner-init:/docker-entrypoint-initdb.d:ro
+    # db/runner-init está vacío: las tablas del Runner las crea Hibernate
     deploy:
       replicas: 1
       restart_policy:
@@ -201,7 +204,9 @@ services:
       POSTGRES_DB: compose-db
     volumes:
       - accessmanager-pgdata:/var/lib/postgresql/data
-      - ./db/accessmanager-init:/docker-entrypoint-initdb.d:ro
+    configs:
+      - source: accessmanager_init_sql
+        target: /docker-entrypoint-initdb.d/01-init-accessmanager.sql
     deploy:
       replicas: 1
       restart_policy:
@@ -255,9 +260,13 @@ services:
         published: 443
         mode: ingress
     environment:
-      - DOMAIN_NAME=${DOMAIN_NAME}
+      - DOMAIN_NAME=${DOMAIN_NAME:?DOMAIN_NAME es obligatorio (variable del environment de GitHub)}
+    # La config de nginx viaja como config de Swarm. Los certificados siguen en el host:
+    # /etc/letsencrypt es del sistema (certbot los renueva ahí), no del home.
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/templates/app.conf.template
     volumes:
-      - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
     deploy:
@@ -278,3 +287,20 @@ volumes:
   accessmanager-pgdata:
   runner-pgdata:
   azurite-data:
+
+# -------------------------------------------------------------
+# Configs de Swarm: archivos del repo que antes se copiaban a la VM con scp y se montaban
+# desde ~/. `docker stack deploy` los lee en el runner de Actions y los guarda en Swarm.
+# Un config no se puede modificar: el nombre lleva el hash del contenido (lo calcula el
+# workflow), así un cambio crea uno nuevo y, si el archivo no cambió, no se reinicia nada.
+# -------------------------------------------------------------
+configs:
+  nginx_conf:
+    name: nginx_conf_${NGINX_CONF_HASH:-local}
+    file: ./reverse-proxy/nginx/conf.d/app.conf
+  app_init_sql:
+    name: app_init_${APP_INIT_HASH:-local}
+    file: ./db/app-init/01-init-snippet.sql
+  accessmanager_init_sql:
+    name: accessmanager_init_${ACCESSMANAGER_INIT_HASH:-local}
+    file: ./db/accessmanager-init/01-init-accessmanager.sql

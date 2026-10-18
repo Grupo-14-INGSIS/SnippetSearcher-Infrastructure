@@ -2,7 +2,6 @@ name: Build & Deploy
 
 permissions:
   contents: read
-  packages: write
 
 on:
   repository_dispatch:
@@ -17,92 +16,62 @@ concurrency:
 
 jobs:
   update:
-    name: Deploy to ${{ github.event.client_payload.environment }}
-    environment: ${{ github.event.client_payload.environment }}
+    name: Deploy ${{ github.event.client_payload.service }} to ${{ github.event.client_payload.environment }}
+    # El payload trae la rama del microservicio, que es también el tag de la imagen: develop o
+    # production (en los microservicios la rama de prod es `production`; `main` quedó sin uso).
+    # Coincide con el nombre del environment de GitHub. Cualquier otra rama se rechaza abajo.
+    environment: ${{ github.event.client_payload.environment == 'production' && 'production' || 'develop' }}
+    # Las ramas de features (caso9, 12y15, ...) también publican imagen y hacen dispatch: no se
+    # despliegan (antes pisaban la VM de dev y creaban un environment por rama en GitHub)
+    if: contains(fromJSON('["develop", "production"]'), github.event.client_payload.environment)
     runs-on: ubuntu-latest
+    env:
+      SERVICE_NAME: ${{ github.event.client_payload.service }}
+      BRANCH: ${{ github.event.client_payload.environment }}
     steps:
-
-      - name: Get service and environment from payload
-        id: payload
+      - name: Validate payload
         run: |
-          SERVICE_NAME="${{ github.event.client_payload.service }}"
-          ENV_NAME="${{ github.event.client_payload.environment }}"
-          
-          if [ -z "$SERVICE_NAME" ] || [ -z "$ENV_NAME" ]; then
-            echo "Error: Missing service or environment in payload"
-            exit 1
-          fi
-          
-          echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
-          echo "environment_name=$ENV_NAME" >> $GITHUB_OUTPUT
-          echo "Received request to deploy service: $SERVICE_NAME to environment: $ENV_NAME"
+          case "$SERVICE_NAME" in
+            snippetsearcher-app|snippetsearcher-runner|snippetsearcher-accessmanager|snippetsearcher-ui) ;;
+            *) echo "::error::Servicio desconocido: '$SERVICE_NAME'"; exit 1 ;;
+          esac
 
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Set up SSH to the VM
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_vm && chmod 600 ~/.ssh/id_vm
+          ssh-keyscan -T 10 -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host vm
+            HostName ${{ secrets.SSH_HOST }}
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/id_vm
+            ServerAliveInterval 30
+          EOF
+
+      - name: Log in to GHCR (on the runner)
+        run: echo "${{ secrets.PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
+
+      - name: Resolve the image digest
+        id: image
+        run: |
+          IMAGE_REPO="$SERVICE_NAME"
+          # El paquete de GHCR de la UI se llama distinto que el servicio de Swarm
+          if [ "$SERVICE_NAME" = "snippetsearcher-ui" ]; then IMAGE_REPO="printscript-ui"; fi
+          IMAGE_URI="ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${BRANCH}"
+          # Se pinea el DIGEST y no el tag: si Swarm resolviera el tag, podría reutilizar la imagen
+          # cacheada en el nodo y las réplicas quedarían con la versión vieja aunque el run sea verde.
+          for attempt in 1 2 3; do
+            DIGEST="$(docker buildx imagetools inspect "$IMAGE_URI" --format '{{json .Manifest}}' | jq -r .digest)" && [ -n "$DIGEST" ] && [ "$DIGEST" != "null" ] && break
+            if [ "$attempt" = 3 ]; then echo "::error::No se pudo resolver $IMAGE_URI"; exit 1; fi
+            echo "Retry $attempt in 15s..."; sleep 15
+          done
+          echo "ref=ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${BRANCH}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Update the Swarm service
         env:
-          SERVICE_NAME: ${{ steps.payload.outputs.service_name }}
-          GHCR_PAT: ${{ secrets.PAT }}
-          GHCR_USER: ${{ secrets.GHCR_USER }}
-          ENV_NAME: ${{ steps.payload.outputs.environment_name }}
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GHCR_PAT,GHCR_USER,SERVICE_NAME,ENV_NAME
-          # El service update espera a que las réplicas nuevas pasen el healthcheck
-          command_timeout: 20m
-          script: |
-            set -e
-            cd ~
-
-            # Un deploy a la vez en la VM: los de cada servicio corren en paralelo en Actions
-            # y el `docker image prune` de uno puede borrar capas que otro está extrayendo
-            # (falla con "failed to Lchown ... no such file or directory").
-            exec 9>/tmp/snippetsearcher-deploy.lock
-            echo "--- Waiting for deploy lock ---"
-            flock -w 900 9
-
-            # Cargar variables del host si existen
-            if [ -f .env ]; then
-              set -a
-              source .env 2>/dev/null || true
-              set +a
-            fi
-
-            LOGIN_TOKEN="${GITHUB_TOKEN:-$GHCR_PAT}"
-            LOGIN_USER="${GHCR_USER}"
-
-            echo "--- Logging into GHCR ---"
-            echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
-
-            # Actualizar quirúrgicamente solo este servicio en Docker Swarm
-            # La imagen nueva se descarga y se aplica rolling update a las réplicas
-            # Mapear nombres si difieren entre el servicio Swarm y el paquete GHCR
-            IMAGE_REPO="$SERVICE_NAME"
-            if [ "$SERVICE_NAME" = "snippetsearcher-ui" ]; then
-              IMAGE_REPO="printscript-ui"
-            fi
-
-            IMAGE_URI="ghcr.io/grupo-14-ingsis/${IMAGE_REPO}:${ENV_NAME}"
-            SWARM_SERVICE="snippetsearcher_${SERVICE_NAME}"
-
-            # Bajar la imagen y actualizar el servicio pineando el DIGEST, no el tag.
-            # Si se pasa solo el tag y la resolucion contra el registry falla o llega
-            # antes de que termine el push, Swarm reutiliza la imagen cacheada en el
-            # nodo y las replicas quedan con la version vieja aunque el run sea verde.
-            echo "--- Pulling ${IMAGE_URI} ---"
-            for attempt in 1 2 3; do
-              if docker pull "$IMAGE_URI"; then break; fi
-              if [ "$attempt" = 3 ]; then echo "Pull failed 3 times"; exit 1; fi
-              echo "Pull failed (attempt $attempt), retrying in 15s..."
-              sleep 15
-            done
-            IMAGE_DIGEST="$(docker image inspect "$IMAGE_URI" --format '{{index .RepoDigests 0}}')"
-            echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_DIGEST} ---"
-            docker service update --with-registry-auth --image "$IMAGE_DIGEST" "$SWARM_SERVICE"
-
-            # Limpiar imágenes viejas
-            docker image prune -f || true
-            
-            # Verificar el estado de las réplicas del servicio actualizado
-            docker service ps "$SWARM_SERVICE"
+          DOCKER_HOST: ssh://vm
+        run: |
+          # El update espera a que las réplicas nuevas pasen el healthcheck (rollback si fallan)
+          docker service update --with-registry-auth --image "${{ steps.image.outputs.ref }}" "snippetsearcher_${SERVICE_NAME}"
+          docker service ps "snippetsearcher_${SERVICE_NAME}" --no-trunc --format '{{.Name}} {{.Image}} {{.CurrentState}}' | head -n 6

@@ -1,94 +1,137 @@
-name: Deploy Infrastructure on Change
+name: Deploy Stack
+
+# Despliega el stack de Swarm desde el runner de Actions contra el Docker de la VM por SSH
+# (DOCKER_HOST=ssh://...). docker-stack.yml, la config de nginx y los SQL de init se leen del
+# checkout y viajan por la API de Docker: a la VM no se le copia ningún archivo y no necesita
+# ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
+#
+# Además corre cada 10 minutos (reconciliación): `docker stack deploy` resuelve cada tag
+# (develop / production) a su digest actual y solo actualiza los servicios cuya imagen cambió. Si la
+# VM estuvo apagada mientras se pusheaba, al prenderla queda al día en <= 10 min. Si no cambió
+# nada, no reinicia nada. Si la VM está apagada, el job termina sin error.
 
 on:
   push:
     branches:
       - main
       - develop
-    # Solo redeployar el stack (reinicia TODOS los servicios, ~4 min de 502) cuando cambia
-    # algo que la VM realmente usa; un cambio de docs o de workflows no debe reiniciar nada.
+    # Solo cuando cambia algo que usa el stack: un cambio de docs no debe redeployar
     paths:
       - docker-stack.yml
       - reverse-proxy/**
       - db/**
+      - .github/workflows/deploy.yml
+  schedule:
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
-  deploy:
-    name: Deploy Stack to ${{ github.ref_name == 'main' && 'production' || 'develop' }}
+  targets:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
+    outputs:
+      branches: ${{ steps.pick.outputs.branches }}
     steps:
-      - name: Checkout repository
+      - id: pick
+        # El cron corre sobre la rama por defecto: reconcilia los dos ambientes.
+        # Un push o un run manual despliega solo su rama.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo 'branches=["develop","main"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_name }}" = "develop" ] || [ "${{ github.ref_name }}" = "main" ]; then
+            echo 'branches=["${{ github.ref_name }}"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Solo se despliegan develop (dev) y main (prod), no ${{ github.ref_name }}"
+            exit 1
+          fi
+
+  deploy:
+    needs: targets
+    name: Deploy ${{ matrix.branch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJson(needs.targets.outputs.branches) }}
+    environment: ${{ matrix.branch == 'main' && 'production' || 'develop' }}
+    # Un deploy del stack a la vez por ambiente (el cron no se pisa con un push)
+    concurrency:
+      group: stack-${{ matrix.branch }}
+      cancel-in-progress: false
+    env:
+      STACK: snippetsearcher
+      # Las ramas de Infra (develop / main) no se llaman igual que las de los microservicios
+      # (develop / production): las imágenes de prod se publican como :production, no :main.
+      IMAGE_TAG: ${{ matrix.branch == 'main' && 'production' || 'develop' }}
+      DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+      NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
+      NEW_RELIC_APP_NAME_RUNNER: ${{ vars.NEW_RELIC_APP_NAME_RUNNER }}
+      NEW_RELIC_APP_NAME_ACCESS: ${{ vars.NEW_RELIC_APP_NAME_ACCESS }}
+    steps:
+      - name: Checkout ${{ matrix.branch }}
         uses: actions/checkout@v4
-
-      - name: Copy stack definition and nginx configs to VM
-        uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "docker-stack.yml,reverse-proxy/**,db/**"
-          target: "~/"
+          ref: ${{ matrix.branch }}
 
-      - name: Deploy Swarm Stack via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          GHCR_PAT: ${{ secrets.PAT }}
-          GHCR_USER: ${{ secrets.GHCR_USER }}
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: GHCR_PAT,GHCR_USER
-          # Cada service update espera a que las réplicas nuevas pasen el healthcheck
-          command_timeout: 40m
-          script: |
-            set -e
-            cd ~
+      - name: Check that the VM is reachable
+        id: vm
+        run: |
+          if timeout 10 bash -c "</dev/tcp/${{ secrets.SSH_HOST }}/22" 2>/dev/null; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::notice::La VM de ${{ matrix.branch }} no responde (¿apagada?): se reintenta en el próximo cron"
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::La VM no responde en ${{ secrets.SSH_HOST }}:22"
+            exit 1
+          fi
 
-            # Mismo candado que update_service.yml: no pisarse con un deploy de servicio en curso
-            exec 9>/tmp/snippetsearcher-deploy.lock
-            echo "--- Waiting for deploy lock ---"
-            flock -w 900 9
+      - name: Set up SSH to the VM
+        if: steps.vm.outputs.up == 'true'
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_vm && chmod 600 ~/.ssh/id_vm
+          ssh-keyscan -T 10 -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host vm
+            HostName ${{ secrets.SSH_HOST }}
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/id_vm
+            ServerAliveInterval 30
+          EOF
+          echo "DOCKER_HOST=ssh://vm" >> "$GITHUB_ENV"
 
-            # Cargar variables de entorno del host (~/.env)
-            if [ -f .env ]; then
-              set -a
-              source .env 2>/dev/null || true
-              set +a
-            fi
+      - name: Log in to GHCR (on the runner)
+        if: steps.vm.outputs.up == 'true'
+        run: echo "${{ secrets.PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
 
-            # Si el token no vino en .env, usar el del secret de Actions
-            LOGIN_TOKEN="${GITHUB_TOKEN:-$GHCR_PAT}"
-            LOGIN_USER="${GHCR_USER}"
+      - name: Hash configs (a config of Swarm cannot be modified, so its name carries the content hash)
+        if: steps.vm.outputs.up == 'true'
+        run: |
+          h() { sha256sum "$1" | cut -c1-12; }
+          {
+            echo "NGINX_CONF_HASH=$(h reverse-proxy/nginx/conf.d/app.conf)"
+            echo "APP_INIT_HASH=$(h db/app-init/01-init-snippet.sql)"
+            echo "ACCESSMANAGER_INIT_HASH=$(h db/accessmanager-init/01-init-accessmanager.sql)"
+          } >> "$GITHUB_ENV"
 
-            # Login en GitHub Container Registry
-            echo "--- Logging into GHCR ---"
-            echo "$LOGIN_TOKEN" | docker login ghcr.io -u "$LOGIN_USER" --password-stdin
+      - name: Deploy stack
+        if: steps.vm.outputs.up == 'true'
+        run: |
+          docker info --format 'Swarm: {{.Swarm.LocalNodeState}} en {{.Name}}'
+          # --resolve-image always: cada tag se resuelve a su digest actual en GHCR; si no cambió, no hay update
+          docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml "$STACK"
 
-            # Asegurar que existan todos los directorios de bind mounts
-            mkdir -p ~/db/app-init ~/db/runner-init ~/db/accessmanager-init ~/reverse-proxy/nginx/conf.d
+      - name: Clean up unused configs and images
+        if: steps.vm.outputs.up == 'true'
+        run: |
+          # Los configs en uso no se pueden borrar: solo se van los de versiones anteriores
+          docker config ls --filter "label=com.docker.stack.namespace=$STACK" -q | xargs -r docker config rm 2>/dev/null || true
+          # Solo en el cron: en un push podría correr a la vez que el pull de update_service.yml
+          if [ "${{ github.event_name }}" = "schedule" ]; then docker image prune -f || true; fi
 
-            # Desplegar el stack completo en Docker Swarm
-            echo "--- Deploying Stack: snippetsearcher ---"
-            docker stack deploy --with-registry-auth -c docker-stack.yml snippetsearcher
-
-            # Forzar actualización de todos los servicios para aplicar cambios de infra
-            echo "--- Forcing update of services to reflect infra changes ---"
-            docker service update --force snippetsearcher_snippetsearcher-app || true
-            docker service update --force snippetsearcher_snippetsearcher-runner || true
-            docker service update --force snippetsearcher_snippetsearcher-accessmanager || true
-            docker service update --force snippetsearcher_snippetsearcher-ui || true
-            docker service update --force snippetsearcher_reverse-proxy || true
-
-            # Limpiar imágenes obsoletas
-            docker image prune -f || true
-
-            # Verificar estado de los servicios en el cluster
-            echo "--- Verifying Stack Services ---"
-            docker stack services snippetsearcher
+      - name: Stack status
+        if: steps.vm.outputs.up == 'true'
+        run: docker stack services "$STACK"
