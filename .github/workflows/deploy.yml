@@ -61,6 +61,7 @@ jobs:
           EOF
           echo "DOCKER_HOST=ssh://vm" >> "$GITHUB_ENV"
 
+      # Las imágenes son privadas: Swarm las baja con estas credenciales (--with-registry-auth)
       - name: Log in to GHCR (on the runner)
         run: echo "${{ secrets.PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
 
@@ -78,6 +79,45 @@ jobs:
           docker info --format 'Swarm: {{.Swarm.LocalNodeState}} en {{.Name}}'
           docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml "$STACK"
 
+      # `docker stack deploy` NO espera: le pide el cambio a Swarm y termina mientras la VM sigue bajando
+      # las imágenes. Si un pull falla, Swarm rechaza la tarea ("No such image"), hace rollback y el
+      # workflow terminaría en verde con la versión vieja. Acá se espera a que cada servicio propio corra
+      # exactamente el digest que tiene hoy su tag; si hizo rollback, falla en rojo.
+      - name: Verify every service runs the current image (fail on rollback)
+        run: |
+          expected() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r .digest; }
+          declare -A want
+          for svc in snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager snippetsearcher-ui; do
+            repo="$svc"; [ "$svc" = "snippetsearcher-ui" ] && repo="printscript-ui"
+            want[$svc]="$(expected "ghcr.io/grupo-14-ingsis/${repo}:${IMAGE_TAG}")"
+          done
+          deadline=$((SECONDS + 1200))   # start_period de los Spring es 420s y el update va de a una réplica
+          while :; do
+            missing=""
+            for svc in "${!want[@]}"; do
+              running="$(docker service ps "${STACK}_${svc}" --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
+              total="$(echo "$running" | grep -c . || true)"
+              ok="$(echo "$running" | grep -F "${want[$svc]}" | grep -c '^.* Running' || true)"
+              [ "$total" -gt 0 ] && [ "$ok" = "$total" ] || missing="$missing $svc"
+            done
+            [ -z "$missing" ] && { echo "Todos los servicios corren la imagen actual de :$IMAGE_TAG"; break; }
+            for svc in $missing; do
+              st="$(docker service inspect "${STACK}_${svc}" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}')"
+              if [ "$st" = "rollback_completed" ] || [ "$st" = "rollback_paused" ]; then
+                echo "::error::$svc hizo rollback a la versión anterior. Tareas recientes:"
+                docker service ps "${STACK}_${svc}" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -n 6
+                echo "::error::Si dice 'No such image', falló el pull en la VM. La causa real está en: sudo journalctl -u docker | grep 'pulling image failed'"
+                exit 1
+              fi
+            done
+            if [ $SECONDS -ge $deadline ]; then echo "::error::Timeout esperando:$missing"; exit 1; fi
+            echo "Esperando:$missing"; sleep 20
+          done
+
+      # Recién ahora, con todas las imágenes ya bajadas y corriendo. Un `docker image prune` mientras la
+      # VM baja una imagen borra las capas a medio extraer ("failed to Lchown ... no such file or
+      # directory", "lease does not exist") y el pull falla: así fallaba el App y el Runner (imágenes
+      # grandes, tardan más que la UI) cuando el prune venía justo después de `docker stack deploy`.
       - name: Clean up unused configs and images
         run: |
           # Los configs en uso no se pueden borrar: solo se van los de versiones anteriores

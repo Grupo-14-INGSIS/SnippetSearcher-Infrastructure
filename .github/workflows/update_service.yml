@@ -49,6 +49,7 @@ jobs:
             ServerAliveInterval 30
           EOF
 
+      # Las imágenes son privadas: Swarm las baja con estas credenciales (--with-registry-auth)
       - name: Log in to GHCR (on the runner)
         run: echo "${{ secrets.PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
 
@@ -72,6 +73,17 @@ jobs:
         env:
           DOCKER_HOST: ssh://vm
         run: |
+          SVC="snippetsearcher_${SERVICE_NAME}"
+          WANT="${{ steps.image.outputs.ref }}"
           # El update espera a que las réplicas nuevas pasen el healthcheck (rollback si fallan)
-          docker service update --with-registry-auth --image "${{ steps.image.outputs.ref }}" "snippetsearcher_${SERVICE_NAME}"
-          docker service ps "snippetsearcher_${SERVICE_NAME}" --no-trunc --format '{{.Name}} {{.Image}} {{.CurrentState}}' | head -n 6
+          docker service update --with-registry-auth --image "$WANT" "$SVC" || true
+          # Si la VM no pudo bajar la imagen o la versión nueva no arrancó, Swarm hace rollback: la
+          # especificación vuelve a la imagen anterior. Sin este chequeo el run terminaría en verde.
+          CURRENT="$(docker service inspect "$SVC" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+          docker service ps "$SVC" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -n 6
+          if [ "$CURRENT" != "$WANT" ]; then
+            echo "::error::$SVC no quedó en la imagen nueva (rollback). Corre: $CURRENT"
+            echo "::error::Si las tareas dicen 'No such image', falló el pull en la VM. La causa real está en: sudo journalctl -u docker | grep 'pulling image failed'"
+            exit 1
+          fi
+          echo "$SVC actualizado a $WANT"

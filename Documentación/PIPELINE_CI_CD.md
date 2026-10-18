@@ -207,7 +207,28 @@ Disparadores:
 | Login GHCR | En el runner, con `PAT`. |
 | Hash de configs | Calcula el hash de `app.conf` y de los SQL (los configs de Swarm son inmutables; ver VM_LIMPIA). |
 | Deploy | `docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml snippetsearcher` |
-| Limpieza | Borra configs viejos que nadie usa e imágenes sin uso. |
+| Verificación | Espera (hasta 20 min) a que App, Runner, AccessManager y UI corran **exactamente el digest actual** de su tag. Si alguno hizo rollback (por ejemplo, la VM no pudo bajar la imagen), falla en rojo y muestra el error de las tareas. |
+| Limpieza | Recién después de la verificación: borra configs viejos que nadie usa e imágenes sin uso. |
+
+**Para qué está el `docker image prune`.** Para que no se llene el disco de la VM. Cada deploy baja una
+imagen nueva de App, Runner, AccessManager y UI (las de Java pesan cientos de MB cada una) y **la vieja no se
+borra sola**: queda en disco sin que nadie la use. Tras decenas de deploys son varios GB, y cuando el disco se
+llena el siguiente pull falla con `no space left on device` y el servicio queda en la versión vieja.
+`docker image prune -f` borra **solo imágenes que no usa ningún contenedor**: nunca las que están corriendo
+ni los volúmenes (bases, Redis y Azurite quedan intactos).
+
+Si se saca del workflow, hay que limpiar a mano cada tanto, cuando no haya un deploy corriendo:
+```bash
+docker system df          # cuánto ocupan imágenes, contenedores y volúmenes
+docker image prune -f     # borra las imágenes sin uso
+```
+
+**Por qué la limpieza va al final (el bug de "no se actualiza").** `docker stack deploy` no espera: termina
+mientras la VM todavía baja las imágenes. Un `docker image prune` en ese momento borra las capas a medio
+extraer y el pull falla con `failed to Lchown ... no such file or directory` o `lease does not exist`. Swarm lo
+muestra como `No such image`, hace rollback y queda la versión vieja. Pasaba con App y Runner (imágenes Java
+grandes) y no con la UI (chica, terminaba antes del prune). El deploy viejo lo evitaba con un candado
+(`flock`) en la VM; ahora el prune corre cuando la verificación confirmó que no queda ningún pull en curso.
 
 **Un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
 la que corre. Con `--resolve-image always` traduce cada tag a su digest actual: si es el mismo y los configs
@@ -237,7 +258,7 @@ repositorio y después en la organización.
 | `SSH_HOST` | Secret | env `develop` / `production` | Infra | IP o host de cada VM |
 | `SSH_USER` | Secret | env `develop` / `production` | Infra | Usuario SSH (tiene que poder usar `docker` sin sudo) |
 | `SSH_PRIVATE_KEY` | Secret | env `develop` / `production` | Infra | Clave privada; la pública está en `~/.ssh/authorized_keys` de la VM |
-| `PAT` | Secret | organización | Microservicios e Infra | Dispatch a Infra y login a GHCR desde Infra |
+| `PAT` | Secret | organización | Microservicios e Infra | Dispatch a Infra y login a GHCR desde Infra (las imágenes son privadas: Swarm las baja con esta credencial) |
 | `GHCR_USER` | Secret | organización | Infra | Usuario del login a GHCR |
 | `GITHUB_TOKEN` | Automático | cada run | Microservicios | Push de la imagen a GHCR y paquetes de PrintScript |
 | `VITE_AUTH0_*`, `VITE_BACKEND_URL` | Secret | repo UI | UI | Build-args del bundle |
@@ -280,7 +301,8 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | Lint, detekt, tests o cobertura | El job `ci-cd` del microservicio en rojo | Arreglar y pushear. No se publicó imagen. |
 | VM apagada durante un push | `update_service.yml` o `deploy.yml` en rojo (`i/o timeout` en el puerto 22) | Prender la VM y correr *Actions → Deploy Stack → Run workflow* (rama `develop` o `main`). |
 | La IP de la VM cambió | `i/o timeout` aunque la VM esté prendida | Actualizar `SSH_HOST` en el environment y DuckDNS; poner la IP como estática en Azure. |
-| La versión nueva no arranca | `docker service update` tarda y termina en rollback | La VM sigue con la versión anterior. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
+| La VM no puede bajar la imagen | Tareas `Rejected` con `No such image: ...@sha256:...`, `rollback completed`, y la versión vieja sigue corriendo | `No such image` solo dice que el pull falló. La causa real: `sudo journalctl -u docker \| grep 'pulling image failed'`. Si dice `failed to Lchown ... no such file or directory` o `lease does not exist`, un `docker image prune` borró las capas mientras se bajaban (ver abajo). Si dice `denied` / `unauthorized`, es el token de GHCR. Los workflows fallan en rojo en este caso (antes terminaban en verde). |
+| La versión nueva no arranca | `docker service update` tarda y termina en rollback | La VM sigue con la versión anterior y el workflow falla. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
 | Falta `DOMAIN_NAME` | `deploy.yml` falla con *"DOMAIN_NAME es obligatorio"* | Cargar la variable en el environment. No se tocó nada. |
 | Cambio de config de nginx con error | nginx no levanta tras el deploy (rollback del servicio) | Corregir `app.conf`; probar antes con `nginx -t`. |
 
