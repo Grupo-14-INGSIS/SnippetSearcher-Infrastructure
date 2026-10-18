@@ -9,9 +9,16 @@ x-spring-healthcheck: &spring-healthcheck
   interval: 10s
   timeout: 3s
   retries: 3
-  # Al prender la VM arrancan todas las JVM a la vez y el App tardó ~5 min en abrir el 8080;
-  # durante start_period los fallos no cuentan, así Swarm no lo mata en pleno arranque.
-  start_period: 420s
+  # Al prender la VM arrancan las 6 JVM a la vez (2 App, 2 Runner, 2 AccessManager) sobre 2 CPUs
+  # (load average ~28): con 420s el App no llegaba a abrir el 8080, Swarm lo mataba como
+  # "unhealthy" (exit 137) y volvía a arrancar, en un ciclo que no terminaba. Durante
+  # start_period los fallos no cuentan, así Swarm no lo mata en pleno arranque.
+  start_period: 900s
+
+# Opciones de la JVM de los servicios Spring. TieredStopAtLevel=1 usa solo el compilador JIT
+# rápido (C1): arranca bastante antes y gasta mucha menos CPU al inicio, a cambio de algo menos
+# de rendimiento una vez arrancada. Con 2 CPUs y 6 JVM arrancando juntas, compensa.
+x-java-opts: &java-opts "-Djava.net.preferIPv4Stack=true -XX:TieredStopAtLevel=1"
 
 # Política de reinicio de los servicios Spring: sin max_attempts, para que Swarm no se
 # rinda si una dependencia (base, DNS) tarda en volver y el servicio quede caído.
@@ -39,7 +46,7 @@ services:
         mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
-      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
+      JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: app
       DB_PASSWORD: app
       DB_NAME: appdb
@@ -102,6 +109,7 @@ services:
         mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
+      JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: app
       DB_PASSWORD: app
       DB_NAME: snippet-db
@@ -182,6 +190,7 @@ services:
         mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
+      JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: access_manager
       DB_PASSWORD: access_manager
       DB_NAME: compose-db

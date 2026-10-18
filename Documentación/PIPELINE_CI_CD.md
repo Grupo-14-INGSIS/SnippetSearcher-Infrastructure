@@ -285,12 +285,13 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 
 | Mecanismo | Configuración (`docker-stack.yml`) | Efecto |
 | :--- | :--- | :--- |
-| Healthcheck | `bash -c '</dev/tcp/127.0.0.1/8080'`, `start_period: 420s` | Swarm solo manda tráfico a réplicas que abrieron el 8080. Los 7 minutos de gracia cubren el arranque lento de las JVM al prender la VM. |
+| Healthcheck | `bash -c '</dev/tcp/127.0.0.1/8080'`, `start_period: 900s` | Swarm solo manda tráfico a réplicas que abrieron el 8080. Los 15 minutos de gracia cubren el arranque al prender la VM: 6 JVM sobre 2 CPUs (load average ~28). Con 7 minutos, el App no llegaba, Swarm lo mataba como `unhealthy` (exit 137) y el ciclo no terminaba. |
+| Opciones de la JVM | `JAVA_TOOL_OPTIONS: -XX:TieredStopAtLevel=1` | Solo el compilador JIT rápido: arranque más corto y mucho menos CPU al inicio, a cambio de algo menos de rendimiento sostenido. |
 | Rolling update | `parallelism: 1`, `order: start-first` | Levanta la réplica nueva antes de bajar la vieja: actualizar no corta el servicio. |
 | Rollback | `failure_action: rollback`, `monitor: 60s` | Si la versión nueva no pasa el healthcheck, vuelve sola a la anterior. |
 | Reinicio | `restart_policy: condition: any` | Si un contenedor muere, Swarm lo vuelve a levantar. También al reiniciar la VM. |
 | Red interna | DNS de Swarm (`snippetsearcher-app`, `redis`, ...) | Los servicios se encuentran por nombre; el balanceo entre réplicas es automático. |
-| nginx | Único servicio con 80/443 | Entrada pública: `/` → UI, `/api/` → App, `/runner/` → Runner, `/access/` → AccessManager. |
+| nginx | Único servicio con 80/443 | Entrada pública: `/` → UI, `/api/` → App, `/runner/` → Runner, `/access/` → AccessManager. Resuelve cada servicio **en cada request** (`resolver 127.0.0.11` + `proxy_pass $variable`): arranca aunque el App todavía no exista y esa ruta responde 502 hasta que esté listo. Antes, con el nombre fijo, nginx no levantaba (`host not found in upstream`) mientras el App arrancaba. |
 
 ---
 

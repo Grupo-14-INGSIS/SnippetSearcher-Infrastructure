@@ -91,7 +91,7 @@ jobs:
             repo="$svc"; [ "$svc" = "snippetsearcher-ui" ] && repo="printscript-ui"
             want[$svc]="$(expected "ghcr.io/grupo-14-ingsis/${repo}:${IMAGE_TAG}")"
           done
-          deadline=$((SECONDS + 1200))   # start_period de los Spring es 420s y el update va de a una réplica
+          deadline=$((SECONDS + 2400))   # start_period de los Spring es 900s y el update va de a una réplica
           while :; do
             missing=""
             for svc in "${!want[@]}"; do
