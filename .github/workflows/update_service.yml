@@ -49,10 +49,19 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: GHCR_PAT,GHCR_USER,SERVICE_NAME,ENV_NAME
+          # El service update espera a que las réplicas nuevas pasen el healthcheck
+          command_timeout: 20m
           script: |
             set -e
             cd ~
-            
+
+            # Un deploy a la vez en la VM: los de cada servicio corren en paralelo en Actions
+            # y el `docker image prune` de uno puede borrar capas que otro está extrayendo
+            # (falla con "failed to Lchown ... no such file or directory").
+            exec 9>/tmp/snippetsearcher-deploy.lock
+            echo "--- Waiting for deploy lock ---"
+            flock -w 900 9
+
             # Cargar variables del host si existen
             if [ -f .env ]; then
               set -a
@@ -82,7 +91,12 @@ jobs:
             # antes de que termine el push, Swarm reutiliza la imagen cacheada en el
             # nodo y las replicas quedan con la version vieja aunque el run sea verde.
             echo "--- Pulling ${IMAGE_URI} ---"
-            docker pull "$IMAGE_URI"
+            for attempt in 1 2 3; do
+              if docker pull "$IMAGE_URI"; then break; fi
+              if [ "$attempt" = 3 ]; then echo "Pull failed 3 times"; exit 1; fi
+              echo "Pull failed (attempt $attempt), retrying in 15s..."
+              sleep 15
+            done
             IMAGE_DIGEST="$(docker image inspect "$IMAGE_URI" --format '{{index .RepoDigests 0}}')"
             echo "--- Updating service ${SWARM_SERVICE} to ${IMAGE_DIGEST} ---"
             docker service update --with-registry-auth --image "$IMAGE_DIGEST" "$SWARM_SERVICE"

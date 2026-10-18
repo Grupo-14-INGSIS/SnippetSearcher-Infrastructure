@@ -218,7 +218,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - DOMAIN_NAME=${DOMAIN_NAME}
+      - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
     volumes:
       - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro

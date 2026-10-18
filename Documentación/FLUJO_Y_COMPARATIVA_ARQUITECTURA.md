@@ -269,8 +269,9 @@ La decisión de no utilizar Redis como caché y restringirlo estrictamente a **C
    - Sin caché en Redis, **`AccessManager` es siempre la única fuente de verdad en tiempo real**. Un permiso revocado tiene efecto en el milisegundo cero.
 3. **`AssetService` como Única Fuente de Verdad para Código**:
    - El código fuente no se duplica en memoria intermedia; reside de forma fidedigna y versionada en el almacenamiento de blobs (`AssetService`).
-4. **Tolerancia a Fallos Robusta (User Stories #12 y #15)**:
-   - Gracias a las capacidades de **Redis Streams** (`XADD`, `XREADGROUP`, `XACK`), si un Runner se reinicia durante una tarea de linteo masivo de 500 snippets, el mensaje permanece en la lista de pendientes (PEL - Pending Entries List) y es retomado automáticamente sin pérdida de trabajo.
+4. **Tolerancia a Fallos Robusta (User Stories #12 y #15) — ¿Qué pasa si falla a la mitad?**:
+   - **Fallo a nivel de un snippet particular:** Si un archivo individual tiene errores de sintaxis, código corrupto o no se encuentra en `asset-service`, el fallo se aísla dentro del `try/catch` de ese mensaje. Se marca ese snippet como `"failed"` en la base de datos de `App`, se confirma con `XACK` y el procesamiento continúa sin frenar el resto del lote.
+   - **Caída abrupta del contenedor / nodo a mitad del lote (Crash, OOM o reinicio):** El acuse de recibo (`XACK`) solo se envía tras procesar con éxito el mensaje. Si el Runner se cae mientras procesaba un snippet o quedaban mensajes en vuelo, los mensajes no confirmados quedan retenidos en la **PEL (Pending Entries List)** de Redis Streams. Al recuperarse el contenedor o tomar la posta otra réplica en Docker Swarm, los mensajes huérfanos se reasignan y reanudan automáticamente (*At-Least-Once Delivery*), sin perder mensajes ni reprocesar innecesariamente los snippets que ya habían sido confirmados.
 
 ---
 

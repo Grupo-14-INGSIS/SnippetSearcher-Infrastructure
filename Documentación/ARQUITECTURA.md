@@ -211,10 +211,22 @@ asset --> azurite : Almacena blobs
 * **Mecanismo**: `App` actúa como fachada única. Cuando la UI solicita o guarda un snippet, `App` delega internamente a `Runner` la lectura/escritura en `AssetService`.
 * **Beneficio**: El frontend desconoce los puertos internos; se reduce la complejidad del cliente web.
 
-#### C. Redis EXCLUSIVAMENTE como Cola de Mensajería (Streams Queue)
-* **Principio de Responsabilidad Única**: Redis no almacena caché de permisos ni de código. Su único rol es ser el **Message Broker** para procesamiento asíncrono y tolerante a fallos (User Stories #12 y #15).
-* **Consistencia Inmediata (Zero Stale Data)**: Al no cachear permisos, `AccessManager` es siempre la **única fuente de la verdad en tiempo real**. Si se revoca un permiso, tiene efecto instantáneo en el milisegundo cero.
-* **Tolerancia a Fallos**: Implementación con Consumer Groups (`runner_group`), lectura bloqueante (`XREADGROUP`) y acuse de recibo (`XACK`). Si el Runner se reinicia, los mensajes pendientes (PEL) se reanudan automáticamente.
+#### C. Redis: Streams de trabajos y estado del linteo
+* **Rol:** Redis es el **canal de mensajes** entre App y Runner (Redis Streams) y guarda el **estado de los trabajos de linteo en curso** (`pending` / `failed`). El código sigue en el bucket y los permisos en AccessManager.
+* **Streams:** `snippet-jobs` (App → Runner, consumer group `runner_group`) y `snippet-job-results` (Runner → App, consumer group `app_group`). El Runner ya no le avisa al App por HTTP.
+* **Tolerancia a fallos:** ACK manual (solo si el procesamiento terminó bien), recuperación periódica de mensajes sin confirmar con `XPENDING` + `XCLAIM`, y *dead letter* después de 3 entregas.
+* **Compliance:** la tabla `snippet` guarda solo el resultado (`compliant` true/false). `pending` y `failed` viven en Redis y la API combina las dos fuentes.
+
+##### Flujo Asíncrono de Modificación de Reglas (User Stories #12 y #15)
+1. `PUT /api/v1/rules`: el App guarda las reglas en el Runner y, por cada snippet propio de ese lenguaje, marca `pending` en Redis y publica `{task, snippetId, userId, language, version}` en `snippet-jobs`. Responde `202 Accepted`.
+2. Una réplica del Runner lee el mensaje (`XREADGROUP`), baja el código del bucket, lintea o formatea con las reglas del dueño y la versión del snippet, publica el resultado en `snippet-job-results` y recién ahí hace `XACK`.
+3. El App consume el resultado: guarda `compliant` en Postgres y limpia el estado (o lo marca `failed`). Si fue un formateo, encola un linteo nuevo.
+
+El snippet también se lintea al crearse y al editar su contenido. Un reconciliador encola los que nunca tuvieron resultado.
+
+> El detalle completo (claves, esquema de mensajes, reintentos, modelo compliant/pending, UI, comandos de
+> `redis-cli` y qué cambió respecto de la versión anterior) está en **`USO_DE_REDIS.md`**. El uso del bucket
+> está en **`USO_DE_BUCKETS.md`**.
 
 #### D. Engine Central con Plugins en Runner (Strategy Pattern)
 * En el Runner se definió la abstracción extensible:

@@ -8,9 +8,10 @@ CREATE TABLE IF NOT EXISTS snippet (
     name VARCHAR(255) NOT NULL,
     bucket_id VARCHAR(255) NOT NULL,
     formatter_applied BOOLEAN DEFAULT TRUE,
-    linter_applied BOOLEAN DEFAULT TRUE,
     language VARCHAR(255) NOT NULL,
-    compliance VARCHAR(255) DEFAULT 'pending',
+    -- Resultado del último linteo: TRUE cumple / FALSE no cumple / NULL todavía no se linteó.
+    -- "pending" y "failed" NO se guardan acá: son estados del trabajo y viven en Redis.
+    compliant BOOLEAN,
     description TEXT DEFAULT '',
     version TEXT DEFAULT '1.1'
     );

@@ -45,10 +45,17 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: GHCR_PAT,GHCR_USER
+          # Cada service update espera a que las réplicas nuevas pasen el healthcheck
+          command_timeout: 40m
           script: |
             set -e
             cd ~
-            
+
+            # Mismo candado que update_service.yml: no pisarse con un deploy de servicio en curso
+            exec 9>/tmp/snippetsearcher-deploy.lock
+            echo "--- Waiting for deploy lock ---"
+            flock -w 900 9
+
             # Cargar variables de entorno del host (~/.env)
             if [ -f .env ]; then
               set -a

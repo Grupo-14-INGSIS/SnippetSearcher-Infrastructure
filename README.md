@@ -7,14 +7,16 @@ Repositorio central de infraestructura, orquestación y despliegue continuo (CI/
 ## 1. Índice de Documentación Técnica
 
 Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`Documentación/`](./Documentación/):
-* **[Arquitectura General](ARQUITECTURA.md)**: Justificación técnica de microservicios, bases de datos PostgreSQL, Redis Streams, Nginx y New Relic.
-* **[Dockerización y Docker Compose](DOCKERIZACION.md)**: Explicación de los Dockerfiles Multi-stage, imágenes publicadas en GHCR y ejecución local con Docker Compose.
-* **[Docker Swarm y Ambientes](SWARM_Y_AMBIENTES.md)**: Configuración de Stacks en Swarm, 2 réplicas stateless, balanceo interno IPVS, rolling updates y estrategia de branching (`develop` y `production`).
-* **[Flujo de un Snippet y Comparativa](FLUJO_Y_COMPARATIVA_ARQUITECTURA.md)**: Diagramas PlantUML de secuencia, Nginx como Reverse Proxy y Redis exclusivamente como Message Queue.
-* **[Catálogo de Rutas REST](RUTAS_REST.md)**: Especificación técnica de endpoints RESTful.
-* **[Calidad, Linter, Formateador y CI/CD](CALIDAD_LINTER_FORMATTER_CI.md)**: Estándares de código heredados de PrintScript, plugins `myPlugin`, Ktlint, Detekt, JaCoCo y Git hooks.
-* **[Estrategia de Tags Docker](ESTRATEGIA_TAGS_DOCKER.md)**: Estrategia de doble etiquetado (`:rama` y `:<rama>-<commit>`), trazabilidad, rollbacks y compatibilidad con Swarm.
-* **[Checklist de Producción](../PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
+* **[Arquitectura General](Documentación/ARQUITECTURA.md)**: Justificación técnica de microservicios, bases de datos PostgreSQL, Redis Streams, Nginx y New Relic.
+* **[Uso de Redis Streams (Topología, Pros y Contras)](Documentación/USO_DE_REDIS.md)**: Arquitectura de Redis Streams, patrón Productor-Consumidor, concurrencia, tolerancia a fallos (PEL/ACK) y pros/contras.
+* **[Testing E2E con Cypress](Documentación/TESTING_CYPRESS_E2E.md)**: Estrategia de tests reales sin mocks, autodetección Local/VM y comandos de ejecución.
+* **[Dockerización y Docker Compose](Documentación/DOCKERIZACION.md)**: Explicación de los Dockerfiles Multi-stage, imágenes publicadas en GHCR y ejecución local con Docker Compose.
+* **[Docker Swarm y Ambientes](Documentación/SWARM_Y_AMBIENTES.md)**: Configuración de Stacks en Swarm, 2 réplicas stateless, balanceo interno IPVS, rolling updates y estrategia de branching (`develop` y `production`).
+* **[Flujo de un Snippet y Comparativa](Documentación/FLUJO_Y_COMPARATIVA_ARQUITECTURA.md)**: Diagramas PlantUML de secuencia, Nginx como Reverse Proxy y Redis exclusivamente como Message Queue.
+* **[Catálogo de Rutas REST](Documentación/RUTAS_REST.md)**: Especificación técnica de endpoints RESTful.
+* **[Calidad, Linter, Formateador y CI/CD](Documentación/CALIDAD_LINTER_FORMATTER_CI.md)**: Estándares de código heredados de PrintScript, plugins `myPlugin`, Ktlint, Detekt, JaCoCo y Git hooks.
+* **[Estrategia de Tags Docker](Documentación/ESTRATEGIA_TAGS_DOCKER.md)**: Estrategia de doble etiquetado (`:rama` y `:<rama>-<commit>`), trazabilidad, rollbacks y compatibilidad con Swarm.
+* **[Checklist de Producción](PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
 
 ---
 

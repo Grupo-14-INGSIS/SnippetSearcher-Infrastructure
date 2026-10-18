@@ -1,5 +1,32 @@
 version: '3.8'
 
+# Healthcheck de los servicios Spring: Swarm solo les manda tráfico cuando el 8080 acepta
+# conexiones, reemplaza las réplicas que dejan de responder y el rollback del update
+# puede detectar una versión que no arranca. Sin esto, una réplica caída o arrancando
+# figura "Running" y nginx devuelve 502. bash viene en eclipse-temurin, no hace falta curl.
+x-spring-healthcheck: &spring-healthcheck
+  test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080' || exit 1"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  # Al prender la VM arrancan todas las JVM a la vez y el App tardó ~5 min en abrir el 8080;
+  # durante start_period los fallos no cuentan, así Swarm no lo mata en pleno arranque.
+  start_period: 420s
+
+# Política de reinicio de los servicios Spring: sin max_attempts, para que Swarm no se
+# rinda si una dependencia (base, DNS) tarda en volver y el servicio quede caído.
+x-spring-restart: &spring-restart
+  condition: any
+  delay: 10s
+
+x-spring-update: &spring-update
+  parallelism: 1
+  delay: 10s
+  order: start-first
+  failure_action: rollback
+  # Tiempo que Swarm vigila la tarea nueva antes de dar el update por bueno
+  monitor: 60s
+
 services:
   # -------------------------------------------------------------
   # App (4 réplicas con balanceo de carga interno Swarm)
@@ -24,18 +51,11 @@ services:
       REDIS_PORT: 6379
       RUNNER_HOST: snippetsearcher-runner
       RUNNER_PORT: 8080
+    healthcheck: *spring-healthcheck
     deploy:
       replicas: 2
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-      update_config:
-        parallelism: 1
-        delay: 10s
-        order: start-first
-        failure_action: rollback
+      restart_policy: *spring-restart
+      update_config: *spring-update
 
   # -------------------------------------------------------------
   # Base de Datos App (1 réplica con persistencia de volumen)
@@ -90,18 +110,11 @@ services:
       REDIS_PORT: 6379
       APP_HOST: snippetsearcher-app
       APP_PORT: 8080
+    healthcheck: *spring-healthcheck
     deploy:
       replicas: 2
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-      update_config:
-        parallelism: 1
-        delay: 10s
-        order: start-first
-        failure_action: rollback
+      restart_policy: *spring-restart
+      update_config: *spring-update
 
   # -------------------------------------------------------------
   # Base de Datos Runner
@@ -171,18 +184,11 @@ services:
       DB_NAME: compose-db
       DB_HOST: accessmanager-db
       DB_PORT: 5432
+    healthcheck: *spring-healthcheck
     deploy:
       replicas: 2
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-      update_config:
-        parallelism: 1
-        delay: 10s
-        order: start-first
-        failure_action: rollback
+      restart_policy: *spring-restart
+      update_config: *spring-update
 
   # -------------------------------------------------------------
   # Base de Datos AccessManager
