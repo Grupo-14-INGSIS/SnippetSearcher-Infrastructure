@@ -36,7 +36,7 @@ x-spring-update: &spring-update
 
 services:
   # -------------------------------------------------------------
-  # App (4 réplicas con balanceo de carga interno Swarm)
+  # App (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-app:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-develop}
@@ -180,7 +180,7 @@ services:
         condition: on-failure
 
   # -------------------------------------------------------------
-  # AccessManager (4 réplicas con balanceo de carga interno Swarm)
+  # AccessManager (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-develop}
@@ -222,7 +222,7 @@ services:
         condition: on-failure
 
   # -------------------------------------------------------------
-  # UI (4 réplicas con balanceo de carga interno Swarm)
+  # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
   # -------------------------------------------------------------
   snippetsearcher-ui:
     image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
