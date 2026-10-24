@@ -38,12 +38,11 @@ services:
   # -------------------------------------------------------------
   # App (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
+  # Sin `ports`: igual que el resto de los servicios, solo se alcanza por la red interna del
+  # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
+  # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
   snippetsearcher-app:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-develop}
-    ports:
-      - target: 8080
-        published: 19081
-        mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -103,10 +102,6 @@ services:
   # -------------------------------------------------------------
   snippetsearcher-runner:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-develop}
-    ports:
-      - target: 8080
-        published: 19082
-        mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -149,10 +144,6 @@ services:
   # -------------------------------------------------------------
   asset-service:
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
-    ports:
-      - target: 8080
-        published: 19084
-        mode: ingress
     environment:
       AZURE_HOST: http://azurite
     deploy:
@@ -162,16 +153,6 @@ services:
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
-    ports:
-      - target: 10000
-        published: 10000
-        mode: ingress
-      - target: 10001
-        published: 10001
-        mode: ingress
-      - target: 10002
-        published: 10002
-        mode: ingress
     volumes:
       - azurite-data:/data
     deploy:
@@ -184,10 +165,6 @@ services:
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-develop}
-    ports:
-      - target: 8080
-        published: 19083
-        mode: ingress
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -226,10 +203,8 @@ services:
   # -------------------------------------------------------------
   snippetsearcher-ui:
     image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
-    ports:
-      - target: 80
-        published: 5173
-        mode: ingress
+    # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
+    # de localhost, llama a window.location.origin (/api, /runner): todo pasa por el reverse-proxy.
     environment:
       - APP_HOST=snippetsearcher-app
       - APP_PORT=8080
@@ -277,6 +252,9 @@ services:
         target: /etc/nginx/templates/app.conf.template
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Tokens del desafío ACME: certbot los escribe en el host y nginx los sirve en el puerto 80.
+      # La carpeta tiene que existir en la VM antes del deploy (sudo mkdir -p /var/www/certbot).
+      - /var/www/certbot:/var/www/certbot:ro
     command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
     deploy:
       replicas: 1
