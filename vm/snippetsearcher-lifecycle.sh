@@ -20,7 +20,7 @@ STACK="snippetsearcher"
 STATE_DIR="/var/lib/snippetsearcher"
 STATE_FILE="$STATE_DIR/replicas"
 # Orden de apagado: lo que depende de otros primero, las bases y el almacenamiento al final
-APP_SERVICES="reverse-proxy snippetsearcher-ui snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager"
+APP_SERVICES="certbot reverse-proxy snippetsearcher-ui snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager"
 INFRA_SERVICES="asset-service azurite redis appdb runner-db accessmanager-db"
 
 log() { echo "[snippetsearcher-lifecycle] $*"; }

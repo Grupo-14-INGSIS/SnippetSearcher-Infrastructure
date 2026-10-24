@@ -245,17 +245,22 @@ services:
         mode: ingress
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:?DOMAIN_NAME es obligatorio (variable del environment de GitHub)}
-    # La config de nginx viaja como config de Swarm. Los certificados siguen en el host:
-    # /etc/letsencrypt es del sistema (certbot los renueva ahí), no del home.
+    # La config de nginx viaja como config de Swarm. Los certificados están en /etc/letsencrypt
+    # del host (del sistema, no del home): el servicio certbot los escribe y nginx los lee.
     configs:
       - source: nginx_conf
         target: /etc/nginx/templates/app.conf.template
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
-      # Tokens del desafío ACME: certbot los escribe en el host y nginx los sirve en el puerto 80.
+      # Tokens del desafío ACME: certbot los escribe y nginx los sirve en el puerto 80.
       # La carpeta tiene que existir en la VM antes del deploy (sudo mkdir -p /var/www/certbot).
       - /var/www/certbot:/var/www/certbot:ro
-    command: /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"
+    # nginx lee el certificado solo al arrancar: cada 6 h hace `nginx -s reload` (sin cortar
+    # conexiones) para tomar el que haya renovado certbot.
+    command: >-
+      /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
+      (while true; do sleep 6h; nginx -s reload; done) &
+      exec nginx -g 'daemon off;'"
     deploy:
       replicas: 1
       restart_policy:
@@ -264,6 +269,26 @@ services:
         # el sitio queda en ERR_CONNECTION_REFUSED aunque el resto del stack este up.
         condition: any
         delay: 5s
+
+  # -------------------------------------------------------------
+  # Certbot: renueva el certificado de Let's Encrypt (modo webroot)
+  # Cada 12 h corre `certbot renew`, que solo renueva si faltan menos de 30 días. Deja el token
+  # del desafío en /var/www/certbot (lo sirve el reverse-proxy en el 80) y el certificado nuevo
+  # en /etc/letsencrypt. El primer certificado se pide a mano una vez (ver HTTPS_NGINX_CORS.md).
+  # -------------------------------------------------------------
+  certbot:
+    image: certbot/certbot:v2.11.0
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+    entrypoint: >-
+      /bin/sh -c "trap exit TERM;
+      while true; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 30s
 
 # -------------------------------------------------------------
 # Volúmenes Persistentes
