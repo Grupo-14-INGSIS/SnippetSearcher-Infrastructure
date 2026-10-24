@@ -235,7 +235,7 @@ services:
   # Reverse Proxy (Nginx como Edge Gateway)
   # -------------------------------------------------------------
   reverse-proxy:
-    image: nginx:alpine
+    image: nginx:stable-alpine
     ports:
       - target: 80
         published: 80
@@ -250,6 +250,8 @@ services:
     configs:
       - source: nginx_conf
         target: /etc/nginx/templates/app.conf.template
+      - source: nginx_50x_page
+        target: /usr/share/nginx/html/errors/50x.html
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       # Tokens del desafío ACME: certbot los escribe y nginx los sirve en el puerto 80.
@@ -259,7 +261,7 @@ services:
     # conexiones) para tomar el que haya renovado certbot.
     command: >-
       /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
-      (while true; do sleep 6h; nginx -s reload; done) &
+      (while true; do sleep 21600; nginx -s reload; done) &
       exec nginx -g 'daemon off;'"
     deploy:
       replicas: 1
@@ -283,7 +285,7 @@ services:
       - /var/www/certbot:/var/www/certbot
     entrypoint: >-
       /bin/sh -c "trap exit TERM;
-      while true; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done"
+      while true; do certbot renew --webroot -w /var/www/certbot; sleep 43200 & wait $${!}; done"
     deploy:
       replicas: 1
       restart_policy:
@@ -310,6 +312,9 @@ configs:
   nginx_conf:
     name: nginx_conf_${NGINX_CONF_HASH:-local}
     file: ./reverse-proxy/nginx/conf.d/app.conf
+  nginx_50x_page:
+    name: nginx_50x_${NGINX_50X_HASH:-local}
+    file: ./reverse-proxy/nginx/errors/50x.html
   app_init_sql:
     name: app_init_${APP_INIT_HASH:-local}
     file: ./db/app-init/01-init-snippet.sql
