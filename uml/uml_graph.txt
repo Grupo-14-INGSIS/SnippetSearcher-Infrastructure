@@ -1,0 +1,36 @@
+@startuml
+
+cloud Auth0
+agent UI
+agent App
+agent UserService
+agent SnippetService
+agent Runner
+
+agent "redis-streams"
+database "asset-service"
+
+database userdata
+' permissions and rules (linting, formatting)
+database snippetdata
+' linting and formatting statuses, tests
+
+UI -up-> Auth0
+UI -down-> App
+
+App -down-> UserService
+UserService -down-> userdata
+
+App -left-> Runner
+
+App -down-> "redis-streams"
+"redis-streams" -up-> Runner
+
+Runner -down-> "redis-streams"
+"redis-streams" -up-> App
+
+App -right-> SnippetService
+SnippetService -right-> "asset-service"
+SnippetService -down-> snippetdata
+
+@enduml

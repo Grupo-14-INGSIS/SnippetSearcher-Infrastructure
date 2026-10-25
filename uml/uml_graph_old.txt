@@ -1,0 +1,29 @@
+@startuml
+
+cloud Auth0
+agent UI
+agent App
+agent AccessManager
+agent Runner
+agent "redis-streams"
+agent "asset-service"
+
+database rules
+' linting and formatting rules
+database appdb
+' linting and formatting statuses
+database permissions
+
+UI -up-> Auth0
+UI -down-> App : 1. Manage user data\n2. Enqueue jobs\n4. Execute snippet\n5. CRUD tests
+UI -down-> Runner : 3. CRUD snippet
+App -down-> AccessManager : 1. Manage user data
+AccessManager -down-> permissions : 1. Manage user data
+App -down-> "redis-streams" : 2. Enqueue jobs
+App -right-> appdb : 2. Update job status\n5. CRUD tests
+Runner <-down- "redis-streams" : 2. Enqueue jobs
+Runner -right-> App : 2. Update job status
+Runner <-right- App : 4. Execute snippet
+Runner -down-> "asset-service" : 3. CRUD snippet
+Runner -left-> rules : 2. Execute job
+@enduml

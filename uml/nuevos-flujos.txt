@@ -1,0 +1,202 @@
+Servicios:
+* UI
+* App            -> Orquestrador y módulo central
+* redis-streams  -> Medio de comunicación asincrónico
+* Runner         -> Ejecutor estático
+* UserService    -> Módulo de usuario
+* SnippetService -> Módulo de snippets
+
+DBs:
+* userdata       -> Datos de los usuarios, preferencias, permisos
+* snippetdata    -> Datos de los snippets, estado de linteo/formateo, tests
+* asset-service  -> Snippets como archivos
+
+US-1
+COMO desarrollador
+QUIERO crear un snippet usando subidas de archivo
+PARA tener disponible el código más adelante, para operarlo, verlo o poder modificarlo.
+NOTAS:
+* Al momento de crear el snippet deberá proveer los datos: nombre, descripción y lenguaje en el que está escrito el snippet como la versión.
+* El usuario no puede subir snippets que no sean válidos según su parser.
+* En caso de que el snippet sea inválido, se le debe informar al usuario que regla del lenguaje incumplió y la línea y columna dónde lo hizo
+
+FLUJO:
+1. El usuario sube el archivo desde UI
+2. UI envía la petición de carga a App junto al archivo
+3. App envía el archivo a SnippetService y pide que lo guarde
+4. SnippetService guarda el archivo en asset-service y registra el snippet en snippetdata
+5. Al recibir la confirmación de éxito, App pide a UserService que asigne el snippet al usuario
+6. UserService guarda la fila del permiso en userdata
+
+US-2
+COMO desarrollador
+QUIERO actualizar un snippet usando subidas de archivo
+PARA replicar los cambios que hice en mi entorno local en mis snippets en Snippet Searcher.
+NOTAS:
+* Además de poder actualizar el contenido del snippet, el usuario/owner puede actualizar todos los datos del snippet.
+* Todas las actualizaciones que se le hacen al snippet deben respetar las reglas del lenguaje especificado.
+* En caso de que el snippet sea inválido, se le debe informar al usuario que regla del lenguaje incumplió y la línea y columna dónde lo hizo.
+
+FLUJO:
+1. El usuario sube el archivo desde UI
+2. UI envía la petición de carga a App junto al archivo
+3. App envía el archivo a SnippetService y pide que lo guarde
+4. SnippetService actualiza el archivo en asset-service
+
+US-3
+COMO desarrollador
+QUIERO crear un snippet en el editor
+PARA subir snippets a la plataforma sin necesidad de codearlo en mi IDE primero.
+NOTAS:
+* El administrador deberá poder usar un editor embebido en el browser para escribir el código del snippet.
+* Debe cumplir los mismos requisitos que la creación mediante archivo.
+
+FLUJO:
+1. El usuario crea el snippet desde UI
+2. UI envía la petición de creación a App junto al texto
+3. App envía el texto a SnippetService y pide que lo guarde
+4. SnippetService guarda el texto en asset-service y registra el snippet en snippetdata
+5. Al recibir la confirmación de éxito, App pide a UserService que asigne el snippet al usuario
+6. UserService guarda la fila del permiso en userdata
+
+US-4
+COMO desarrollador
+QUIERO actualizar un snippet en el editor
+PARA hacer cambios rápidos en mi snippet sin tener que hacerlo en mi IDE local
+NOTAS:
+* El administrador deberá poder usar un editor embebido en el browser para escribir el código del snippet
+* Debe cumplir los mismos requisitos que la actualización mediante archivo.
+
+FLUJO:
+1. El usuario actualiza el snippet desde UI
+2. UI envía la petición de carga a App junto al archivo
+3. App envía el archivo a SnippetService y pide que lo guarde
+4. SnippetService actualiza el archivo en asset-service
+
+US-5
+COMO administrador de snippets
+QUIERO visualizar todos los snippets a los que tengo acceso
+PARA tener una visión rápida de todos los snippets a los que puedo acceder.
+NOTAS:
+* Debe poder elegir que snippets visualiza según su relación con ellos: sí es autor del snippet, sí el snippet es compartido o ambos.
+* Debe mostrar sí cada snippet es válido o no según las reglas de linteo que le apliquen.
+* La lista debe ser “navegable”: debe permitir filtrar por nombre, lenguaje y “validez” y debe permitir ordenar por esos campos también.
+
+FLUJO:
+
+1. UI solicita la lista de snippets a App
+2. App pide la lista de snippets a la que el usuario tiene acceso a UserService
+3. UserService consulta en userdata los snippets a los que el usuario puede acceder
+4. UserService responde con la lista de nombres de snippet + nivel de permiso
+
+US-6
+COMO administrador de snippets
+QUIERO ver un snippet en particular
+PARA poder ver el contenido del snippet y las reglas de linteo que no pasó
+NOTAS:
+* Se deberá poder visualizar el nombre, la descripción, el lenguaje y el contenido del snippet.
+* Además se deben poder visualizar los tests del snippet y ejecutarlos.
+
+FLUJO:
+1. 
+
+US-7
+COMO owner de snippet
+QUIERO poder compartir mis snippets con otros usuarios
+PARA que ellos puedan visualizar los snippets que creé.
+NOTAS:
+* Se deberá poder elegir el usuario con el que se quiere compartir snippets de un listado.
+* A medida que se escribe se deberán ir filtrando los posibles usuarios.
+* El usuario con el que se comparte el snippet tiene permisos de lectura sobre el snippet y sobre sus tests.
+
+FLUJO:
+
+US-8
+COMO desarrollador
+QUIERO crear tests para un snippet mio
+PARA probar si el snippet funciona bien y documentar su comportamiento.
+NOTAS:
+* Un “test” se compone de una serie de inputs y una serie de outputs. Los inputs se evaluarán según el orden en el que sean inputs. A su vez, los outputs se evaluarán según el orden en el que se llame a la función “println”.
+* Se pueden crear tests “inválidos”, que dado los inputs no producen los outputs esperados
+
+FLUJO:
+
+US-9
+COMO investigador
+QUIERO correr un test de un snippet al que tengo acceso
+PARA ver su ejecución
+NOTAS:
+* Los tests se deben poder visualizar cuando se visualiza el snippet
+* Se podrá correr un test a la vez.
+* Se debe ver el output del test a medida que es evaluado
+
+FLUJO:
+
+US-10
+COMO investigador
+QUIERO ejecutar un snippet proporcionando los inputs a medida que hacen falta y viendo los outputs a medida que son impresos
+PARA probar el snippet y ver como corre
+NOTAS:
+* Se deberán proporcionar los inputs a medida que son pedidos.
+* El usuario deberá visualizar los outputs a medida que son evaluados
+* Se podrá correr un test a la vez.
+
+FLUJO:
+
+US-11
+COMO administrador
+QUIERO habilitar reglas de formateo
+PARA que todos los snippets que administro cumplan las reglas de estilo acordadas.
+NOTAS:
+* Se debe poder habilitar y deshabilitar reglas.
+* Por el momento solo podrán ser habilitadas las reglas predeterminadas de PrintScript.
+
+FLUJO:
+
+US-12
+COMO administrador
+QUIERO que al habilitar una regla de formateo se formateen todos los snippets automáticamente
+PARA que todos los snippets siempre cumplan las reglas de estilo.
+NOTAS:
+* El administrador no debe tener que esperar a que se formateen los snippets cada vez que habilita una regla.
+* Al ser un proceso que puede ser largo ya que el administrador tiene muchos snippets, el proceso debe ser tolerante a fallos. En caso de que falla, el proceso debe reanudar desde dónde falló o salteando el snippet que causó la falla si hubiera.
+
+FLUJO:
+
+US-13
+COMO investigador
+QUIERO descargar un snippet
+PARA evitar copiar y pegar y así no cometer errores
+NOTAS:
+* Se podrán descargar la versión original y la versión formateada del snippet.
+
+FLUJO:
+
+US-14
+COMO administrador
+QUIERO habilitar reglas de linteo
+PARA que todos los snippets que administro cumplan con las reglas de linting.
+NOTAS:
+* Se debe poder habilitar y deshabilitar reglas.
+* Por el momento solo podrán ser habilitadas las reglas predeterminadas de PrintScript.
+
+FLUJO:
+
+US-15
+COMO administrador
+QUIERO que al modificar una regla de linting se evalúen todos los snippets automáticamente
+PARA poder ver cuales de mis snippets respetan las reglas y cuáles no.
+NOTAS:
+* El administrador no debe tener que esperar a que se linteen los snippets cada vez que habilita una regla.
+* Al ser un proceso que puede ser largo ya que el administrador tiene muchos snippets, el proceso debe ser tolerante a fallos. En caso de que falla, el proceso debe reanudar desde dónde falló o salteando el snippet que causó la falla si hubiera.
+
+FLUJO:
+
+US-16
+COMO desarrollador
+QUIERO que al modificar un snippet se corran todos mis tests automáticamente
+PARA saber de forma automática que tests pasan y cuales fallan
+NOTAS:
+* El update del snippet no es modificado por el resultado del test
+
+FLUJO:
