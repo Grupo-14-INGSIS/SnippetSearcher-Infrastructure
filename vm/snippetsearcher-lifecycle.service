@@ -1,0 +1,19 @@
+[Unit]
+Description=SnippetSearcher: baja el stack de Swarm en orden al apagar y lo revisa al prender
+# After=docker.service hace que al APAGAR systemd detenga este servicio ANTES que Docker
+# (el orden de apagado es el inverso al de arranque): así el ExecStop corre con Docker andando.
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/snippetsearcher-lifecycle.sh start
+ExecStop=/usr/local/sbin/snippetsearcher-lifecycle.sh stop
+# Al prender, la revisión puede tardar hasta ~20 min (JVMs en 2 CPUs); al apagar, unos minutos
+TimeoutStartSec=30min
+TimeoutStopSec=10min
+
+[Install]
+WantedBy=multi-user.target

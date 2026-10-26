@@ -211,7 +211,7 @@ services:
 
   # Reverse Proxy (Nginx)
   reverse-proxy:
-    image: nginx:alpine
+    image: nginx:stable-alpine
     container_name: reverse-proxy
     restart: unless-stopped
     ports:
@@ -221,6 +221,7 @@ services:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
     volumes:
       - ./reverse-proxy/nginx/conf.d/app.conf:/etc/nginx/templates/app.conf.template:ro
+      - ./reverse-proxy/nginx/errors/50x.html:/usr/share/nginx/html/errors/50x.html:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - reverse-proxy-network

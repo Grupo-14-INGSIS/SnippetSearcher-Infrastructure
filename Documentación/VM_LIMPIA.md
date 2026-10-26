@@ -2,7 +2,9 @@
 
 ## Objetivo
 En la VM solo queda lo que trae de fábrica más Docker: `~/.ssh` (lo usa Actions para entrar) y
-`/etc/letsencrypt` (certificados del sistema, los renueva certbot). Nada del proyecto vive en el home.
+`/etc/letsencrypt` (certificados del sistema, los renueva certbot). Nada del proyecto vive en el home. Lo único
+instalado del proyecto es el servicio de systemd de apagado y arranque ordenados, fuera del home y versionado
+en `vm/` (ver [Apagado y arranque ordenados](#apagado-y-arranque-ordenados-systemd)).
 
 | Antes (en la VM) | Ahora |
 | :--- | :--- |
@@ -31,6 +33,78 @@ se leen en el runner y viajan por la API: no se copia nada a disco en la VM.
 (`nginx_conf_${NGINX_CONF_HASH}`, lo calcula `deploy.yml`): si el archivo cambia se crea uno nuevo y el
 servicio se actualiza; si no cambia, el nombre es el mismo y no se reinicia nada. Los viejos se borran al
 final de cada deploy (`docker config rm` no puede borrar los que están en uso).
+
+## Por qué la VM ya no necesita los scripts SQL de inicialización
+
+El script sigue existiendo y se sigue usando: lo que cambió es **dónde vive**.
+
+| | Antes | Ahora |
+| :--- | :--- | :--- |
+| Dónde está el SQL | Archivo en la VM: `~/db/app-init/01-init-snippet.sql` (lo copiaba `scp`) | Dentro de Swarm, como **config** `app_init_<hash>` (y `accessmanager_init_<hash>`) |
+| Cómo llega al contenedor | Bind mount `./db/app-init:/docker-entrypoint-initdb.d` desde el home | Swarm monta el config en `/docker-entrypoint-initdb.d/01-init-snippet.sql` |
+| Quién lo pone ahí | El workflow viejo, copiando archivos a la VM | `docker stack deploy` desde Actions: lee el archivo del repo y lo guarda en la base interna (raft) de Swarm |
+
+```yaml
+# docker-stack.yml
+appdb:
+  configs:
+    - source: app_init_sql
+      target: /docker-entrypoint-initdb.d/01-init-snippet.sql
+configs:
+  app_init_sql:
+    name: app_init_${APP_INIT_HASH}
+    file: ./db/app-init/01-init-snippet.sql      # se lee en el runner de Actions, no en la VM
+```
+
+Para Postgres no cambia nada: ve el mismo archivo en la misma ruta. Un config de Swarm es eso, un archivo que
+el orquestador guarda y entrega a los contenedores que lo piden, sin que exista en el disco del host. Se ve con
+`docker config ls` y su contenido con `docker config inspect --pretty app_init_<hash>`.
+
+Además, la imagen de Postgres **solo ejecuta `/docker-entrypoint-initdb.d/` cuando el volumen de datos está
+vacío**, es decir, la primera vez que se crea la base. En dev y prod ya se aplicó hace tiempo: el config está
+para que una base nueva (otra VM, o si se borra el volumen) se cree con el esquema correcto. Los cambios de
+esquema sobre una base existente no van ahí sino en `db/migrations/` y se corren a mano (ver USO_DE_REDIS.md §11).
+
+`db/runner-init` estaba vacío (las tablas del Runner las crea Hibernate), así que ese montaje se sacó.
+
+## Apagado y arranque ordenados (systemd)
+
+**Problema.** Al apagar la VM, Docker se detenía con limpiezas de Swarm a medio hacer (`remove task failed ...
+context canceled`, `network ingress remove failed`). Al prender, Docker encontraba contenedores rotos (`RW layer
+for container ... not found`), Swarm recreaba todo de golpe y, a veces, algún servicio quedaba corriendo con su
+IP virtual pero **sin nombre en el DNS interno**: los que dependían de él caían con `UnknownHostException`. Le
+pasaba a uno distinto cada vez (`appdb`, después `runner-db` y `asset-service`), siempre se arreglaba con
+`docker service update --force`. La relación entre las limpiezas cortadas y el DNS perdido es la explicación más
+consistente con los logs, pero no está probada.
+
+**Solución (sugerida por la cátedra).** Un servicio de systemd en cada VM, versionado en `vm/` de este repo:
+
+| Archivo en el repo | Se instala en |
+| :--- | :--- |
+| `vm/snippetsearcher-lifecycle.sh` | `/usr/local/sbin/snippetsearcher-lifecycle.sh` |
+| `vm/snippetsearcher-lifecycle.service` | `/etc/systemd/system/snippetsearcher-lifecycle.service` |
+| `vm/install.sh` | (no se instala: copia los dos de arriba y habilita el servicio) |
+
+- **Al apagar** (`ExecStop`): como la unidad tiene `After=docker.service`, systemd la detiene **antes** que Docker.
+  Guarda las réplicas de cada servicio en `/var/lib/snippetsearcher/replicas`, baja los servicios en orden
+  (aplicación → bases) y espera a que Swarm termine de limpiar.
+- **Al prender** (`ExecStart`): espera a que Swarm esté activo, restaura las réplicas (bases primero) y durante
+  hasta 20 minutos revisa que cada servicio **que está corriendo** resuelva por nombre desde otro contenedor; a
+  los que no, `docker service update --force`. Un servicio sin tareas corriendo todavía no tiene registro DNS:
+  eso es normal mientras arranca y se revisa en la vuelta siguiente.
+- No usa archivos del proyecto: trabaja sobre los servicios que ya tiene Swarm. El home sigue limpio.
+
+Logs: `journalctl -u snippetsearcher-lifecycle -b` (este arranque) y `-b -1` (el apagado anterior).
+Revisión a mano en cualquier momento: `sudo snippetsearcher-lifecycle.sh check`.
+
+**Requisito:** que el apagado sea un apagado normal del sistema operativo (systemd corre los `ExecStop`). Hay que
+confirmar en el log que el apagado automático de Azure lo cumple: después de un apagado automático,
+`journalctl -u snippetsearcher-lifecycle -b -1` tiene que mostrar `stack detenido en orden`.
+
+**Reset de Swarm.** Para limpiar un estado ya inconsistente (también sugerido por la cátedra):
+`docker stack rm snippetsearcher`, esperar a que se borren las redes, `docker swarm leave --force`,
+`docker swarm init` y volver a desplegar con *Deploy Stack → Run workflow*. Los volúmenes con nombre (datos de
+las bases, Redis, Azurite) son de Docker y no de Swarm: sobreviven.
 
 ## Cuándo se despliega
 - **Push a Infra** (`develop` o `main`) → `deploy.yml` despliega **todo el stack**. `docker stack deploy
