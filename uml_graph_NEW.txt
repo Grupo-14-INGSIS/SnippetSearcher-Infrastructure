@@ -1,0 +1,57 @@
+@startuml Arquitectura_Con_Nginx
+skinparam roundcorner 10
+skinparam defaultTextAlignment center
+skinparam shadowing false
+skinparam monochrome true
+skinparam packageStyle rectangle
+
+actor "Usuario / Browser" as client
+cloud "Auth0\n(Identidad / JWT)" as auth0
+
+package "Perímetro / Edge Gateway" {
+    rectangle "Nginx Reverse Proxy\n(Puertos :80 / :443 SSL)" as nginx
+}
+
+package "Docker Swarm Stack (snippetsearcher)" {
+    rectangle "printscript-ui\n(Frontend SPA)\n[2 Réplicas]" as ui
+    rectangle "snippetsearcher-app\n(Core / BFF)\n[2 Réplicas]" as app
+    rectangle "snippetsearcher-runner\n(Execution Engine)\n[2 Réplicas]" as runner
+    rectangle "snippetsearcher-accessmanager\n(Autorización y Roles)\n[2 Réplicas]" as access
+
+    database "appdb\n(PostgreSQL 16)\n[1 Réplica]" as appdb
+    database "runner-db\n(PostgreSQL 16)\n[1 Réplica]" as runnerdb
+    database "accessmanager-db\n(PostgreSQL 16)\n[1 Réplica]" as accessdb
+
+    queue "Redis\n(Streams / Message Queue)\n[1 Réplica]" as redis
+    rectangle "asset-service\n(API Storage)\n[1 Réplica]" as asset
+    database "Azurite\n(Azure Blob Emulator)\n[1 Réplica]" as azurite
+    rectangle "certbot\n(Renovación SSL Webroot)\n[1 Réplica]" as certbot
+}
+
+' Flujos de cliente externo
+client -right-> auth0 : 1. Autenticación (JWT)
+client --> nginx : 2. HTTPS (Entrada única)
+
+' Enrutamiento de Nginx
+nginx --> ui : / (Archivos estáticos)
+nginx --> app : /api/* (API Backend)
+nginx --> runner : /runner/* (Ejecución / Código)
+nginx --> access : /access/* (Permisos)
+nginx ..> certbot : Desafío ACME (/.well-known/acme-challenge/ en :80)
+
+' Comunicación interna de microservicios
+app --> access : Consulta permisos (Tiempo real)
+access --> accessdb : Persiste permisos y roles
+
+app --> appdb : Metadata de snippets y tests (compliant boolean)
+app --> redis : 1. Encola tareas en stream 'snippet-jobs' (lint, format)
+
+redis --> runner : 2. Consumer Group 'runner_group' (Procesa en background)
+runner --> redis : 3. Publica resultados en stream 'snippet-job-results'
+redis --> app : 4. Consumer Group 'app_group' (Actualiza compliant en appdb)
+
+runner --> runnerdb : Reglas de formateo y linteo
+runner --> asset : Lectura y guardado de código fuente
+asset --> azurite : Persistencia de blobs
+
+@enduml
