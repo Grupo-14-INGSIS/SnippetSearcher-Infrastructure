@@ -42,7 +42,7 @@ services:
   # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
   # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
   snippetsearcher-app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:${IMAGE_TAG:-develop}
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-d30d1ca49ed910a6e26bba4a4a6e933677b0fcb6
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -101,7 +101,7 @@ services:
   # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${IMAGE_TAG:-develop}
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-a6c3b88ac75f2e6ffdeb520b28c84226b4c1b066
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -164,7 +164,7 @@ services:
   # AccessManager (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:${IMAGE_TAG:-develop}
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-58181d1c3c8555f1cc28fe0f3d519b3441f79369
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
@@ -202,7 +202,7 @@ services:
   # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
   # -------------------------------------------------------------
   snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:${IMAGE_TAG:-develop}
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop-730597aff006d5a1aaa24cca8c1ddc370b43dcf7
     # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
     # de localhost, llama a window.location.origin (/api, /runner): todo pasa por el reverse-proxy.
     environment:
