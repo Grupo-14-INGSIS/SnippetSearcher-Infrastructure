@@ -67,7 +67,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.PAT }}
 
       - name: Hash configs (a config of Swarm cannot be modified, so its name carries the content hash)
         run: |
