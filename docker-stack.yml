@@ -202,7 +202,7 @@ services:
   # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
   # -------------------------------------------------------------
   snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop-730597aff006d5a1aaa24cca8c1ddc370b43dcf7
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop-a904b662734e73a1ab57719ec0cf6b300bf9fc7a
     # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
     # de localhost, llama a window.location.origin (/api, /runner): todo pasa por el reverse-proxy.
     environment:
