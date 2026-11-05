@@ -101,7 +101,7 @@ services:
   # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-a6c3b88ac75f2e6ffdeb520b28c84226b4c1b066
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-fc82f85fa0b5a536d877e1e070ae594aef6abd71
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       JAVA_TOOL_OPTIONS: *java-opts
