@@ -28,6 +28,7 @@
                                    ▼
  Infra: deploy.yml (push a develop o main, o Run workflow manual)
    ├─ docker stack deploy: todo el stack, solo cambia lo que difiere
+   ├─ commit humano (no solo .md): reinicia App, Runner, AccessManager y UI, de a uno
    ├─ espera a que cada servicio corra la imagen de docker-stack.yml (falla si hubo rollback)
    └─ docker image prune: recién después de esa espera
                                    │
@@ -43,6 +44,16 @@ corre ningún script ni guarda archivos del proyecto (ver [VM_LIMPIA.md](VM_LIMP
 `docker-stack.yml` es el registro de qué versión corre en cada ambiente: cada deploy de un microservicio queda
 como un commit `chore: update Docker image ...` en la rama de Infra que corresponde. Ese commit va directo a la
 rama, sin PR. Los PR se abren a mano, de `develop` a `production`, en cada microservicio.
+
+| Qué llega a Infra | Qué hace Deploy Stack |
+| :--- | :--- |
+| **Commit automático** de `update-infra` | Despliega solo el servicio que cambió |
+| **Commit humano** | Redeploya todo: fuerza el reinicio de App, Runner, AccessManager y UI |
+| **Commit humano solo de archivos `.md`** | No reinicia nada |
+| ***Run workflow*** | Aplica el stack, sin forzar |
+
+El run de Infra que aparece después de un push a un microservicio no es un deploy de más: es **el** deploy,
+porque solo Infra tiene acceso a la VM.
 
 No hay deploys automáticos sin un push: si la VM estaba apagada, al prenderla se corre *Deploy Stack* a mano.
 
@@ -190,7 +201,7 @@ Sigue en el repo, pero no interviene en ningún deploy.
 
 Disparadores:
 - `push` a `develop` o `main` (cualquier archivo de Infra).
-- `workflow_dispatch` (botón *Run workflow*): para redeployar a mano, por ejemplo al prender la VM.
+- `workflow_dispatch` (botón *Run workflow*): para aplicar el stack a mano, por ejemplo al prender la VM. No fuerza reinicios.
 
 `environment` = `develop` para la rama `develop`, `production` para `main`. Sobre otra rama el job no corre.
 
@@ -201,6 +212,8 @@ Disparadores:
 | Hash de configs | Calcula el hash de `app.conf` y de los SQL (los configs de Swarm son inmutables; ver VM_LIMPIA). |
 | Contexto de Docker | Crea `swarm-vm` (`ssh://<SSH_USER>@<SSH_HOST>`): los comandos de Swarm corren contra la VM. |
 | Deploy | `docker --context swarm-vm stack deploy --with-registry-auth --resolve-image always --compose-file docker-stack.yml snippetsearcher` |
+| Decidir si se fuerza | Mira los commits del push. Fuerza si es un `push` con algún archivo que no sea `.md` en un commit cuyo autor no sea `github-actions[bot]`. |
+| Redeploy forzado | Solo si corresponde: `docker service update --force` de AccessManager, Runner, App y UI, de a uno y esperando a cada uno. No toca bases, Redis ni Azurite. |
 | Verificación | Espera (hasta 40 min) a que App, Runner, AccessManager y UI corran **exactamente el digest de la imagen que pide `docker-stack.yml`**. Si alguno hizo rollback (por ejemplo, la VM no pudo bajar la imagen), falla en rojo y muestra el error de las tareas. |
 | Limpieza | Recién después de la verificación: borra configs viejos que nadie usa e imágenes sin uso. |
 | Estado | `docker stack services snippetsearcher`. |
@@ -225,7 +238,13 @@ muestra como `No such image`, hace rollback y queda la versión vieja. Pasaba co
 grandes) y no con la UI (chica, terminaba antes del prune). El deploy viejo lo evitaba con un candado
 (`flock`) en la VM; ahora el prune corre cuando la verificación confirmó que no queda ningún pull en curso.
 
-**Un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
+**Redeploy forzado por un commit humano.** Se identifica por el autor del commit porque `update-infra` hace el
+commit como `github-actions[bot]`, aunque pushea con el `PAT` de una persona. Va de a un servicio porque 2 CPUs
+no alcanzan para arrancar todas las JVM a la vez, así que puede tardar bastante. Como la imagen es la misma, la
+verificación no detectaría un rollback: si `docker service update` falla, el job termina en rojo en ese paso.
+Si el commit también cambia el stack, un servicio puede reiniciarse dos veces en el mismo deploy.
+
+**Sin redeploy forzado, un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
 la que corre. Con `--resolve-image always` traduce cada tag a su digest actual: si es el mismo y los configs
 tienen el mismo nombre (mismo hash), no hay diferencia y no se toca ningún servicio. Por eso no hace falta
 filtrar qué archivos dispararon el push: uno de docs termina sin cambios. Antes el script forzaba
@@ -299,6 +318,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | La IP de la VM cambió | `i/o timeout` aunque la VM esté prendida | Actualizar `SSH_HOST` en el environment y DuckDNS; poner la IP como estática en Azure. |
 | La VM no puede bajar la imagen | Tareas `Rejected` con `No such image: ...@sha256:...`, `rollback completed`, y la versión vieja sigue corriendo | `No such image` solo dice que el pull falló. La causa real: `sudo journalctl -u docker \| grep 'pulling image failed'`. Si dice `failed to Lchown ... no such file or directory` o `lease does not exist`, un `docker image prune` borró las capas mientras se bajaban (ver abajo). Si dice `denied` / `unauthorized`, es el token de GHCR. Los workflows fallan en rojo en este caso (antes terminaban en verde). |
 | La versión nueva no arranca | La verificación de `deploy.yml` sigue en `Esperando:` y termina en rollback | La VM sigue con la versión anterior y el workflow falla. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
+| El redeploy forzado falla | `Force redeploy of the microservices` en rojo | Ese servicio volvió a la tarea anterior y los que seguían no se reiniciaron. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
 | Falla `Update image version` en un microservicio | `update-infra` en rojo; la imagen se publicó, pero no aparece el commit en Infra | Suele ser un choque con otro repo que escribió en Infra al mismo tiempo: **Re-run failed jobs** en ese run. Si vuelve a fallar, leer el error del paso. |
 | Falla la verificación por tiempo | `Timeout esperando: <servicios>` a los 40 minutos | Ver el estado con `docker service ps snippetsearcher_<servicio> --no-trunc`. El deploy pudo haber quedado a medias. |
 | Al prender la VM, las JVM no terminan de arrancar | App, Runner y AccessManager en `0/2` durante mucho tiempo, `load average` muy alto (~30 en 2 CPUs), tareas `Failed ... exit (137): unhealthy container` cada pocos minutos | Las 6 JVM compiten por la CPU y ninguna abre el 8080 antes de que el healthcheck la mate, así que vuelven a arrancar en un ciclo. Para cortarlo una vez: `docker service scale <app>=1 <runner>=1 <accessmanager>=1`, esperar `1/1` y volver a `=2`. Prevención: `start_period: 900s` y `-XX:TieredStopAtLevel=1` (§8). |
@@ -328,7 +348,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 4. **¿Qué pasa si pusheo con la VM apagada?** El deploy falla y nadie lo reintenta. Al prenderla, *Run
    workflow* de *Deploy Stack* trae lo último de todos los servicios.
 5. **¿Por qué un push de docs a Infra no reinicia nada?** `docker stack deploy` solo actualiza servicios cuya
-   especificación cambió (digest de imagen o nombre de config).
+   especificación cambió (digest de imagen o nombre de config), y un commit solo de `.md` no fuerza el reinicio.
 6. **¿Por qué el tag de prod es `:production` si la rama de prod de Infra es `main`?** El tag sale de la rama del
    microservicio, y ahí la rama de prod es `production`. Por eso `update-infra` traduce `production` a `main`.
 7. **¿Cómo se evita cortar el servicio al actualizar?** `order: start-first` + healthcheck: la réplica nueva
@@ -337,3 +357,5 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
    Actions por la API de Docker (contexto `swarm-vm` por SSH). Solo quedan `~/.ssh` y `/etc/letsencrypt`.
 9. **¿Por qué no se mergea `develop` en `main` en Infra?** Sus `docker-stack.yml` tienen versiones distintas a
    propósito: un merge podría poner imágenes de desarrollo en producción.
+10. **¿Por qué el commit automático no reinicia todo?** Porque cada push a un microservicio llega a Infra como
+    un commit: si forzara, un cambio en Runner reiniciaría App, AccessManager y UI.

@@ -12,7 +12,7 @@
 | Repositorio | Rama Prod | Tag de Imagen | Disparador / Workflow |
 | :--- | :---: | :---: | :--- |
 | **Microservicios** (`App`, `Runner`, `AccessManager`, `printscript-ui`) | `production` | `:production` y `:production-<commit>` | Merge o push a `production` → CI compila imagen, publica en GHCR y el job `update-infra` escribe `:production-<commit>` en `docker-stack.yml` de la rama `main` de Infra. Ese push dispara `deploy.yml`. |
-| **Infraestructura** (`SnippetSearcher-Infrastructure`) | `main` | N/A | Push a `main` o *Run workflow* manual → `deploy.yml` conecta con el contexto de Docker `swarm-vm`, inyecta Swarm Configs inmutables con hash SHA256, despliega el stack completo sin tocar archivos en la VM y verifica que cada servicio corra la imagen pedida. |
+| **Infraestructura** (`SnippetSearcher-Infrastructure`) | `main` | N/A | Push a `main` o *Run workflow* manual → `deploy.yml` conecta con el contexto de Docker `swarm-vm`, inyecta Swarm Configs inmutables con hash SHA256, despliega el stack completo sin tocar archivos en la VM y verifica que cada servicio corra la imagen pedida. Un commit humano que toque algo más que `.md` fuerza además el reinicio de los cuatro microservicios; *Run workflow* y los commits automáticos no. |
 
 `main` solo difiere de `develop` en las cuatro líneas `image:` de `docker-stack.yml`, y las ramas de Infra **no se mergean entre sí**. Ver [Pipeline CI/CD](Documentación/PIPELINE_CI_CD.md).
 

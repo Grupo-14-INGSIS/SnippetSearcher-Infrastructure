@@ -6,8 +6,9 @@ name: Deploy Stack
 # archivo y no necesita ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
 #
 # Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag de docker-stack.yml
-# a su digest y solo actualiza los servicios cuya especificación cambió. Un push que no cambia
-# el stack (por ejemplo, de docs) no reinicia nada.
+# a su digest y solo actualiza los servicios cuya especificación cambió. Un commit automático de
+# update-infra solo actualiza su servicio. Un commit humano también reinicia los microservicios,
+# salvo que toque solo archivos .md.
 #
 # Si se pusheó con la VM apagada: al prenderla, Actions -> Deploy Stack -> Run workflow (rama
 # develop o main) pone cada servicio en la versión anotada en docker-stack.yml.
@@ -101,6 +102,33 @@ jobs:
             --resolve-image always \
             --compose-file "$COMPOSE_FILE" \
             "$STACK"
+
+      # Commit automático (update-infra): se actualiza solo el servicio cuya versión cambió.
+      # Commit humano: también se reinician los microservicios, salvo que toque solo archivos .md.
+      # Run workflow no fuerza nada: sirve para poner al día la VM después de prenderla.
+      - name: Decide whether to force a redeploy
+        id: redeploy
+        run: |
+          force=false
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && \
+            jq -r '.commits[]? | select(.author.name != "github-actions[bot]") | (.added + .modified + .removed)[]' "$GITHUB_EVENT_PATH" \
+            | grep -qvi '\.md$'; then
+            force=true
+          fi
+          echo "force=$force" >> "$GITHUB_OUTPUT"
+          echo "Forzar reinicio de los microservicios: $force"
+
+      # De a un servicio y esperando a cada uno: 2 CPUs no alcanzan para arrancar todas las JVM a la vez.
+      # Las bases, Redis y Azurite no se tocan. Con la misma imagen, la verificación de abajo no detecta
+      # un rollback: si `service update` falla, el job termina en rojo acá.
+      - name: Force redeploy of the microservices (human commit)
+        if: steps.redeploy.outputs.force == 'true'
+        run: |
+          set -euo pipefail
+          for svc in snippetsearcher-accessmanager snippetsearcher-runner snippetsearcher-app snippetsearcher-ui; do
+            echo "Reiniciando $svc"
+            docker --context swarm-vm service update --force --with-registry-auth "${STACK}_${svc}"
+          done
 
       # `docker stack deploy` NO espera: le pide el cambio a Swarm y termina mientras la VM sigue bajando
       # las imágenes. Si un pull falla, Swarm rechaza la tarea ("No such image"), hace rollback y el
