@@ -326,6 +326,26 @@ ese run: cada commit ya quedó en la rama.
 GitHub deja en espera solo el último y cancela los intermedios, que pueden aparecer como `cancelled`. No se
 pierden versiones: ese último run aplica el `docker-stack.yml` completo.
 
+**La versión se anota con el commit y se despliega con el próximo run que corra.** El commit de `update-infra`
+deja la versión en `docker-stack.yml`, y ese commit dispara un Deploy Stack. Si ese run corre, despliega la
+versión. Si lo reemplazan mientras espera, la despliega el run que corra después, porque cada deploy aplica el
+archivo completo:
+
+```
+                 Corriendo     Esperando
+Commit de App    App           -
+Commit de Access App           Access
+Commit de Runner App           Runner     → Access queda cancelled
+Commit de UI     App           UI         → Runner queda cancelled
+App termina      UI            -          → aplica las 4 versiones y las verifica
+```
+
+- Un run `cancelled` en espera **no ejecutó ningún paso ni tocó la VM**. Se canceló el run, no la versión anotada.
+- Un run que ya está corriendo no se cancela (`cancel-in-progress: false`).
+- Si el **último** Deploy Stack de la rama está en verde, los `cancelled` anteriores se pueden ignorar.
+- Si el deploy falla, por ejemplo con la VM apagada, la versión sigue anotada pero nadie reintenta: se aplica con
+  *Run workflow* o con el próximo push a esa rama de Infra.
+
 ---
 
 ## 7. Secrets, variables y environments
