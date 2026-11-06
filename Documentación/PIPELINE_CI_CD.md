@@ -238,11 +238,57 @@ muestra como `No such image`, hace rollback y queda la versión vieja. Pasaba co
 grandes) y no con la UI (chica, terminaba antes del prune). El deploy viejo lo evitaba con un candado
 (`flock`) en la VM; ahora el prune corre cuando la verificación confirmó que no queda ningún pull en curso.
 
-**Redeploy forzado por un commit humano.** Se identifica por el autor del commit porque `update-infra` hace el
-commit como `github-actions[bot]`, aunque pushea con el `PAT` de una persona. Va de a un servicio porque 2 CPUs
+**Redeploy forzado por un commit humano.** Va de a un servicio porque 2 CPUs
 no alcanzan para arrancar todas las JVM a la vez, así que puede tardar bastante. Como la imagen es la misma, la
 verificación no detectaría un rollback: si `docker service update` falla, el job termina en rojo en ese paso.
 Si el commit también cambia el stack, un servicio puede reiniciarse dos veces en el mismo deploy.
+
+### Cómo distingue un commit automático de uno humano
+
+Lo decide el paso `Decide whether to force a redeploy` de `deploy.yml`, y se basa en el **autor del commit**.
+
+**De dónde sale el autor.** El job `update-infra` de cada microservicio configura ese nombre antes de commitear:
+```bash
+git config user.name "github-actions[bot]"
+```
+Un commit hecho por una persona lleva su propio nombre de Git.
+
+**Cómo lo lee Infra.** En cada push, GitHub deja un JSON con el evento en `$GITHUB_EVENT_PATH`. Ahí está la lista
+`commits`, con el autor y los archivos de cada commit:
+```bash
+force=false
+if [ "$GITHUB_EVENT_NAME" = "push" ] && \
+  jq -r '.commits[]? | select(.author.name != "github-actions[bot]") | (.added + .modified + .removed)[]' "$GITHUB_EVENT_PATH" \
+  | grep -qvi '\.md$'; then
+  force=true
+fi
+```
+
+Se lee así:
+
+1. **`$GITHUB_EVENT_NAME` = `push`:** un *Run workflow* nunca fuerza.
+2. **`select(.author.name != ...)`:** descarta los commits automáticos y se queda con los humanos.
+3. **`(.added + .modified + .removed)[]`:** lista los archivos que tocaron esos commits humanos.
+4. **`grep -qvi '\.md$'`:** busca algún archivo que no termine en `.md`.
+
+Si queda alguno, `force=true` y corre el paso `Force redeploy of the microservices`.
+
+| Push | Commits humanos | Archivos que no son `.md` | ¿Fuerza? |
+| :--- | :--- | :--- | :--- |
+| `chore: update Docker image ...` de `update-infra` | Ninguno | - | No |
+| Cambio en `deploy.yml` o `docker-stack.yml` | Sí | Sí | **Sí** |
+| Cambio solo en documentación `.md` | Sí | No | No |
+| Cambio en documentación y en `app.conf` | Sí | Sí | **Sí** |
+| *Run workflow* | No aplica | - | No |
+
+**Por qué el autor y no quien pushea.** `update-infra` pushea con el `PAT`, así que GitHub registra ese push a
+nombre del dueño del token (`github.actor`): parecería hecho por una persona. El autor del commit sí es distinto.
+
+**Casos a tener en cuenta:**
+- Un `git revert` hecho a mano es un commit humano: si revierte una versión en `docker-stack.yml`, también
+  reinicia los cuatro microservicios.
+- El nombre lo define Git y no se valida: un commit humano con el autor `github-actions[bot]` no forzaría nada.
+- Para ver qué se decidió, abrir el paso en Actions: imprime `Forzar reinicio de los microservicios: true` o `false`.
 
 **Sin redeploy forzado, un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
 la que corre. Con `--resolve-image always` traduce cada tag a su digest actual: si es el mismo y los configs
