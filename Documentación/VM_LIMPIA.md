@@ -14,6 +14,7 @@ en `vm/` (ver [Apagado y arranque ordenados](#apagado-y-arranque-ordenados-syste
 | `~/reverse-proxy/` (bind mount de `app.conf`) | **Config de Swarm** `nginx_conf_<hash>` |
 | `~/db/*-init` (bind mount de los SQL) | **Configs de Swarm** `app_init_<hash>`, `accessmanager_init_<hash>` (`runner-init` estaba vacío) |
 | `~/.docker/config.json` (lo dejaba `docker login`) | No hace falta: el login es en Actions |
+| Agente de New Relic instalado en el host | **No se instala**: Deploy Stack levanta el contenedor `newrelic-infra` con `docker run`. La clave viene del secret `NEW_RELIC_LICENSE_KEY` |
 
 ## Cómo funciona
 
