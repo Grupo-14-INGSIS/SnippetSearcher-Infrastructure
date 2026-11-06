@@ -168,16 +168,26 @@ fi
 Después, `update-infra`:
 
 1. Hace checkout de Infra en `infra_branch`, con el `PAT`.
-2. Reemplaza la versión en la línea `image:` de ese servicio con `sed`. Si no la encuentra, falla.
-3. Si la versión ya estaba, termina sin commit.
-4. Hace commit como `github-actions[bot]`, `git pull --rebase` y `git push` directo a la rama, sin PR.
+2. Trae lo último de la rama.
+3. Reemplaza la versión en la línea `image:` de ese servicio con `sed`. Si no la encuentra, falla.
+4. Si la versión ya estaba, termina sin commit.
+5. Hace commit como `github-actions[bot]` y `git push` directo a la rama, sin PR.
+6. Si rechazan el push, espera entre 5 y 14 segundos y repite desde el paso 2, hasta 6 veces.
 
 Ese push dispara `deploy.yml`. Usa `PAT` porque el `GITHUB_TOKEN` de un repo no puede escribir en otro, y un
 push hecho con `GITHUB_TOKEN` tampoco dispararía workflows.
 
-**Choque entre repos.** Si dos microservicios escriben en la misma rama de Infra en el mismo momento, el paso
-`Update image version` de uno puede fallar. La imagen ya quedó publicada: alcanza con **Re-run failed jobs** en
-ese run. Para evitarlo, mergear a `production` de a un microservicio, esperando que termine el run anterior.
+**Concurrencia al mergear varios PR juntos.** Hay dos niveles:
+
+| Nivel | Qué lo resuelve | Comportamiento |
+| :--- | :--- | :--- |
+| Varios repos escriben en Infra a la vez | Reintentos de `update-infra` | Al que le rechazan el push vuelve a aplicar su versión sobre lo último de la rama |
+| Dos runs del mismo repo y la misma rama | `concurrency: update-infra-<rama>` en el job | Corre uno a la vez. Si se acumulan, queda el último, que trae la versión más nueva |
+| Varios commits llegan a Infra | `concurrency: stack-<rama>` en `deploy.yml` | Un deploy a la vez; si se acumulan, queda el último, que aplica el `docker-stack.yml` completo |
+
+El arreglo está en cada microservicio y no en Infra, porque GitHub limita `concurrency` a un solo repo: no
+puede ordenar runs de repos distintos. Por eso el choque entre repos se resuelve con reintentos.
+Si después de 6 intentos sigue fallando, la imagen ya quedó publicada: alcanza con **Re-run failed jobs**.
 
 **Volver a una versión anterior.** Revertir en la rama de Infra el commit `chore: update Docker image ...`:
 ```bash
@@ -253,23 +263,31 @@ git config user.name "github-actions[bot]"
 ```
 Un commit hecho por una persona lleva su propio nombre de Git.
 
-**Cómo lo lee Infra.** En cada push, GitHub deja un JSON con el evento en `$GITHUB_EVENT_PATH`. Ahí está la lista
-`commits`, con el autor y los archivos de cada commit:
+**Cómo lo lee Infra.** `github.event.before` es el commit en el que estaba la rama antes del push. El checkout usa
+`fetch-depth: 0` para tener el historial, y con eso se recorren los commits de ese push:
 ```bash
 force=false
-if [ "$GITHUB_EVENT_NAME" = "push" ] && \
-  jq -r '.commits[]? | select(.author.name != "github-actions[bot]") | (.added + .modified + .removed)[]' "$GITHUB_EVENT_PATH" \
-  | grep -qvi '\.md$'; then
-  force=true
+if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+  files="$(
+    for commit in $(git rev-list "$BEFORE..$GITHUB_SHA"); do
+      [ "$(git log -1 --format=%an "$commit")" = "github-actions[bot]" ] && continue
+      git -c core.quotepath=false diff-tree --no-commit-id --name-only -r "$commit"
+    done
+  )"
+  if printf '%s\n' "$files" | grep -v '^$' | grep -qvi '\.md$'; then
+    force=true
+  fi
 fi
 ```
 
 Se lee así:
 
 1. **`$GITHUB_EVENT_NAME` = `push`:** un *Run workflow* nunca fuerza.
-2. **`select(.author.name != ...)`:** descarta los commits automáticos y se queda con los humanos.
-3. **`(.added + .modified + .removed)[]`:** lista los archivos que tocaron esos commits humanos.
-4. **`grep -qvi '\.md$'`:** busca algún archivo que no termine en `.md`.
+2. **`git rev-list "$BEFORE..$GITHUB_SHA"`:** lista los commits que entraron con este push.
+3. **`git log --format=%an`:** lee el autor de cada uno y saltea los automáticos.
+4. **`diff-tree`:** lista los archivos de los commits humanos. `core.quotepath=false` evita que Git escape los
+   acentos: sin eso, `Documentación/x.md` saldría entre comillas y no terminaría en `.md`.
+5. **`grep -qvi '\.md$'`:** busca algún archivo que no termine en `.md`.
 
 Si queda alguno, `force=true` y corre el paso `Force redeploy of the microservices`.
 
@@ -288,6 +306,8 @@ nombre del dueño del token (`github.actor`): parecería hecho por una persona. 
 - Un `git revert` hecho a mano es un commit humano: si revierte una versión en `docker-stack.yml`, también
   reinicia los cuatro microservicios.
 - El nombre lo define Git y no se valida: un commit humano con el autor `github-actions[bot]` no forzaría nada.
+- Si un commit humano queda en espera y otro push lo reemplaza antes de que empiece su deploy, el forzado se
+  pierde, porque cada run solo mira los commits de su propio push (ver *Concurrencia*). Se soluciona con otro commit.
 - Para ver qué se decidió, abrir el paso en Actions: imprime `Forzar reinicio de los microservicios: true` o `false`.
 
 **Sin redeploy forzado, un push que no cambia el stack no reinicia nada.** `docker stack deploy` compara la especificación nueva con
@@ -303,7 +323,8 @@ pone cada servicio en la versión anotada en `docker-stack.yml`. Si fallaron var
 ese run: cada commit ya quedó en la rama.
 
 **Concurrencia**: `stack-<rama>`, un deploy del stack a la vez por ambiente. Si llegan varios pushes seguidos,
-GitHub deja en espera solo el último, que igual despliega el `docker-stack.yml` completo.
+GitHub deja en espera solo el último y cancela los intermedios, que pueden aparecer como `cancelled`. No se
+pierden versiones: ese último run aplica el `docker-stack.yml` completo.
 
 ---
 
@@ -365,7 +386,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | La VM no puede bajar la imagen | Tareas `Rejected` con `No such image: ...@sha256:...`, `rollback completed`, y la versión vieja sigue corriendo | `No such image` solo dice que el pull falló. La causa real: `sudo journalctl -u docker \| grep 'pulling image failed'`. Si dice `failed to Lchown ... no such file or directory` o `lease does not exist`, un `docker image prune` borró las capas mientras se bajaban (ver abajo). Si dice `denied` / `unauthorized`, es el token de GHCR. Los workflows fallan en rojo en este caso (antes terminaban en verde). |
 | La versión nueva no arranca | La verificación de `deploy.yml` sigue en `Esperando:` y termina en rollback | La VM sigue con la versión anterior y el workflow falla. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
 | El redeploy forzado falla | `Force redeploy of the microservices` en rojo | Ese servicio volvió a la tarea anterior y los que seguían no se reiniciaron. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
-| Falla `Update image version` en un microservicio | `update-infra` en rojo; la imagen se publicó, pero no aparece el commit en Infra | Suele ser un choque con otro repo que escribió en Infra al mismo tiempo: **Re-run failed jobs** en ese run. Si vuelve a fallar, leer el error del paso. |
+| Falla `Update image version` en un microservicio | `update-infra` en rojo; la imagen se publicó, pero no aparece el commit en Infra | El paso ya reintenta 6 veces, así que no es un choque común. Leer el error y usar **Re-run failed jobs**. Revisar el `PAT` si dice `denied` o `403`. |
 | Falla la verificación por tiempo | `Timeout esperando: <servicios>` a los 40 minutos | Ver el estado con `docker service ps snippetsearcher_<servicio> --no-trunc`. El deploy pudo haber quedado a medias. |
 | Al prender la VM, las JVM no terminan de arrancar | App, Runner y AccessManager en `0/2` durante mucho tiempo, `load average` muy alto (~30 en 2 CPUs), tareas `Failed ... exit (137): unhealthy container` cada pocos minutos | Las 6 JVM compiten por la CPU y ninguna abre el 8080 antes de que el healthcheck la mate, así que vuelven a arrancar en un ciclo. Para cortarlo una vez: `docker service scale <app>=1 <runner>=1 <accessmanager>=1`, esperar `1/1` y volver a `=2`. Prevención: `start_period: 900s` y `-XX:TieredStopAtLevel=1` (§8). |
 | Un servicio no encuentra su base (`UnknownHostException: appdb`) | El servicio se cae con `exit (1)`; en el log, `Unable to determine Dialect without JDBC metadata` y más abajo `Caused by: java.net.UnknownHostException: appdb`. La base está `1/1` y dice `ready to accept connections`. | Swarm perdió el registro DNS de ese servicio (pasa a veces después de un reinicio): tiene su IP virtual pero el nombre no resuelve. Diagnóstico desde otro contenedor: `docker exec <runner> getent hosts appdb` no devuelve nada. Arreglo: `docker service update --force snippetsearcher_appdb` (recrea la tarea y la vuelve a registrar; los datos están en el volumen y no se tocan). |
@@ -377,7 +398,6 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 ## 10. Problemas conocidos
 
 - **Cypress no corre en CI** (la UI no tiene script `test`): los e2e solo corren a mano.
-- **Dos repos pueden chocar al escribir en Infra** (sección 4). `update-infra` no reintenta solo.
 - **`update_service.yml` sigue en el repo** aunque nadie lo dispara, y `GHCR_USER` solo lo usa ese workflow.
 - **Contraseñas en texto plano** en `docker-stack.yml`, y el repo es público. Ver la parte opcional de VM_LIMPIA.
 
