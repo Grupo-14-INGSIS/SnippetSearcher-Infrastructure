@@ -9,8 +9,8 @@ en `vm/` (ver [Apagado y arranque ordenados](#apagado-y-arranque-ordenados-syste
 | Antes (en la VM) | Ahora |
 | :--- | :--- |
 | `~/.env` con `GITHUB_TOKEN` (login a GHCR) | Login en el **runner de Actions** con el secret `PAT`; `--with-registry-auth` le pasa la credencial a Swarm |
-| `~/.env` con `DOMAIN_NAME` / `IMAGE_TAG` | **Variables del environment de GitHub** (`vars.DOMAIN_NAME`); `IMAGE_TAG` sale de la rama de Infra (`develop` → `develop`, `main` → `production`) |
-| `~/docker-stack.yml` (copiado con `scp`) | Se lee del checkout: `DOCKER_HOST=ssh://vm docker stack deploy ...` corre en Actions contra el Docker de la VM |
+| `~/.env` con `DOMAIN_NAME` / `IMAGE_TAG` | **Variables del environment de GitHub** (`vars.DOMAIN_NAME`). `IMAGE_TAG` ya no existe: cada rama de Infra tiene la versión exacta de cada imagen en `docker-stack.yml` |
+| `~/docker-stack.yml` (copiado con `scp`) | Se lee del checkout: `docker --context swarm-vm stack deploy ...` corre en Actions contra el Docker de la VM |
 | `~/reverse-proxy/` (bind mount de `app.conf`) | **Config de Swarm** `nginx_conf_<hash>` |
 | `~/db/*-init` (bind mount de los SQL) | **Configs de Swarm** `app_init_<hash>`, `accessmanager_init_<hash>` (`runner-init` estaba vacío) |
 | `~/.docker/config.json` (lo dejaba `docker login`) | No hace falta: el login es en Actions |
@@ -21,11 +21,11 @@ en `vm/` (ver [Apagado y arranque ordenados](#apagado-y-arranque-ordenados-syste
 GitHub Actions (runner)                              VM (Swarm manager)
   checkout del repo
   docker login ghcr.io  (secret PAT)
-  DOCKER_HOST=ssh://vm  ── SSH (secret SSH_PRIVATE_KEY) ──▶  dockerd
+  contexto swarm-vm     ── SSH (secret SSH_PRIVATE_KEY) ──▶  dockerd
   docker stack deploy -c docker-stack.yml                     guarda servicios, configs y la auth del registry
 ```
 
-Con `DOCKER_HOST=ssh://...` el CLI de Docker corre en el runner y habla con el daemon de la VM por SSH
+Con el contexto `swarm-vm` el CLI de Docker corre en el runner y habla con el daemon de la VM por SSH
 (en la VM ejecuta `docker system dial-stdio`). Los archivos que referencia el stack (`file:` de los configs)
 se leen en el runner y viajan por la API: no se copia nada a disco en la VM.
 
@@ -108,10 +108,10 @@ las bases, Redis, Azurite) son de Docker y no de Swarm: sobreviven.
 
 ## Cuándo se despliega
 - **Push a Infra** (`develop` o `main`) → `deploy.yml` despliega **todo el stack**. `docker stack deploy
-  --resolve-image always` resuelve cada tag (`develop`, `production`) a su digest actual y solo actualiza los
-  servicios cuya especificación cambió: un push que no cambia el stack no reinicia nada.
-- **Push a un microservicio** (`develop` o `production`) → `update_service.yml` actualiza **solo ese servicio**,
-  también por `DOCKER_HOST`, pineando el digest de la imagen.
+  --resolve-image always` resuelve cada tag de `docker-stack.yml` a su digest y solo actualiza los servicios cuya
+  especificación cambió: un push que no cambia el stack no reinicia nada.
+- **Push a un microservicio** (`develop` o `production`) → el job `update-infra` escribe la versión nueva en
+  `docker-stack.yml` de Infra (rama `develop` o `main`), y ese push dispara `deploy.yml`.
 - **VM apagada durante un push**: el deploy falla y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía
   y, para traer lo último, *Actions → Deploy Stack → Run workflow* sobre `develop` o `main`.
 
@@ -130,7 +130,6 @@ deploy:
   if: github.ref_name == 'develop' || github.ref_name == 'main'
   environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}   # 2. la rama elige el environment
   env:                                                                         # 3. valores de ESE environment
-    IMAGE_TAG: ${{ github.ref_name == 'main' && 'production' || 'develop' }}   # tag de las imágenes
     DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
     NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
     ...
@@ -139,20 +138,14 @@ deploy:
 1. Se decide qué rama se despliega.
 2. `environment:` es lo único que conecta el job con un environment: `main` → `production`, `develop` → `develop`.
    Ojo con los nombres: la rama de prod de **Infra** es `main`, pero la de los **microservicios** es
-   `production` (su `main` quedó sin uso). Por eso las imágenes de prod tienen el tag `:production` y
-   `IMAGE_TAG` se traduce: Infra `main` → imágenes `:production`.
+   `production` (su `main` quedó sin uso). Por eso `update-infra` traduce: `production` escribe en Infra `main`.
 3. Dentro del job, `vars.X` y `secrets.X` se resuelven contra ese environment. Si un secret no está en el
-   environment, GitHub usa el del repositorio o el de la organización (así llegan `PAT` y `GHCR_USER`).
+   environment, GitHub usa el del repositorio o el de la organización (así llega `PAT`).
 4. El bloque `env:` los pone como variables del shell, y `docker stack deploy` las reemplaza en
    `docker-stack.yml` **en el runner**, antes de mandar el stack a la VM.
 
-**`update_service.yml`**: la rama la manda el microservicio en el dispatch (`"environment": "$branch"` en su
-`ci-cd.yml`). Esa rama (`develop` / `production`) es a la vez el tag de la imagen y el nombre del environment;
-cualquier otra rama (features) se saltea:
-```yaml
-environment: ${{ github.event.client_payload.environment == 'production' && 'production' || 'develop' }}
-if: contains(fromJSON('["develop", "production"]'), github.event.client_payload.environment)
-```
+**`update-infra`** (en cada microservicio): elige la rama de Infra según su propia rama, y `deploy.yml` hace el
+resto. Las ramas de features no publican ni despliegan.
 Detalle completo del pipeline en [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md).
 
 **Valores por defecto en `docker-stack.yml`.** `${VARIABLE:-valor}` usa `valor` si la variable no existe o
@@ -182,9 +175,9 @@ pisaban los valores por defecto. Ahora el lugar para cambiarlos es GitHub, no la
    | `NEW_RELIC_APP_NAME_RUNNER` | `RunnerIngsis_dev` | `RunnerIngsis_prod` | No |
    | `NEW_RELIC_APP_NAME_ACCESS` | `AccessManagerIngsis_dev` | `AccessManagerIngsis_prod` | No |
 
-   Secrets que ya tienen que existir: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY` en cada environment, y `PAT`,
-   `GHCR_USER` (están a nivel organización). Ver [Cómo se elige el environment](#cómo-se-elige-el-environment-y-de-dónde-salen-los-valores).
-4. **Push a `develop`** de `docker-stack.yml`, `deploy.yml` y `update_service.yml`. Corre "Deploy Stack".
+   Secrets que ya tienen que existir: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY` en cada environment, y `PAT` a
+   nivel organización. Ver [Cómo se elige el environment](#cómo-se-elige-el-environment-y-de-dónde-salen-los-valores).
+4. **Push a `develop`** de `docker-stack.yml` y `deploy.yml`. Corre "Deploy Stack".
    El primer deploy reinicia una vez las bases y nginx (cambian sus montajes): ~1-2 min de cortes.
 5. **Verificar**: el sitio anda; ningún servicio monta algo del home:
    ```bash
@@ -196,10 +189,10 @@ pisaban los valores por defecto. Ahora el lugar para cambiarlos es GitHub, no la
    ```bash
    rm -rf ~/.env ~/docker-stack.yml ~/reverse-proxy ~/db ~/.docker/config.json
    ```
-8. **Producción**: merge a `main` y repetir 4 a 7 en la VM de prod.
+8. **Producción**: aplicar los mismos cambios en `main`, sin tocar sus cuatro líneas `image:`, y repetir 4 a 7 en la VM de prod. No mergear `develop` en `main` (ver [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md)).
 
 ## Opcional: contraseñas como secrets de Swarm
 El repo es público y `docker-stack.yml` tiene las contraseñas de las bases en texto plano. Para sacarlas:
-`docker secret create` (desde Actions, con `DOCKER_HOST`), `POSTGRES_PASSWORD_FILE=/run/secrets/...` en
+`docker secret create` (desde Actions, con el contexto `swarm-vm`), `POSTGRES_PASSWORD_FILE=/run/secrets/...` en
 Postgres y `spring.config.import: optional:configtree:/run/secrets/` en cada servicio Spring. Requiere
 cambiar el `application.yml` de App, Runner y AccessManager.

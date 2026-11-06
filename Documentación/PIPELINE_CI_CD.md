@@ -4,8 +4,8 @@
 - [1. Vista general](#1-vista-general)
 - [2. Ramas, ambientes y tags](#2-ramas-ambientes-y-tags)
 - [3. CI/CD de cada microservicio](#3-cicd-de-cada-microservicio)
-- [4. Dispatch a Infra](#4-dispatch-a-infra)
-- [5. update_service.yml: actualizar un servicio](#5-update_serviceyml-actualizar-un-servicio)
+- [4. Escritura de la versión en Infra](#4-escritura-de-la-versión-en-infra)
+- [5. update_service.yml: sin uso](#5-update_serviceyml-sin-uso)
 - [6. deploy.yml: desplegar el stack](#6-deployyml-desplegar-el-stack)
 - [7. Secrets, variables y environments](#7-secrets-variables-y-environments)
 - [8. Qué pasa en la VM: Swarm](#8-qué-pasa-en-la-vm-swarm)
@@ -18,34 +18,31 @@
 ## 1. Vista general
 
 ```
- push a un microservicio (App, Runner, AccessManager, UI)
+ push a develop o production de un microservicio (App, Runner, AccessManager, UI)
    │
-   ├─ job ci-cd ........ lint · detekt · tests · cobertura · build      (falla → no se publica nada)
-   ├─ job build-and-push  docker build + push a GHCR:  :<rama>  y  :<rama>-<sha>
-   └─ dispatch ......... POST /repos/.../SnippetSearcher-Infrastructure/dispatches
-                         { event_type: new-image-ready, environment: <rama>, service: <servicio> }
+   ├─ job de CI ........ lint · detekt · tests · cobertura · build      (falla → no se publica nada)
+   ├─ job build-and-push  docker build + push a GHCR:  :<ambiente>  y  :<ambiente>-<sha>
+   └─ job update-infra .. commit en docker-stack.yml de Infra con la versión nueva
+                          develop → rama develop   ·   production → rama main
                                    │
                                    ▼
- Infra: update_service.yml (repository_dispatch)
-   ├─ solo ramas develop / production (las de features se saltean)
-   ├─ resuelve el digest de ghcr.io/...:<rama>
-   └─ DOCKER_HOST=ssh://vm  docker service update --image <imagen>@<digest>
+ Infra: deploy.yml (push a develop o main, o Run workflow manual)
+   ├─ docker stack deploy: todo el stack, solo cambia lo que difiere
+   ├─ espera a que cada servicio corra la imagen de docker-stack.yml (falla si hubo rollback)
+   └─ docker image prune: recién después de esa espera
                                    │
                                    ▼
  VM (Swarm manager): rolling update, healthcheck, rollback si la versión nueva no arranca
 
- push a Infra (develop o main)  ─┐
-                                 ├─▶ deploy.yml: docker stack deploy (todo el stack)
- Run workflow (manual)          ─┘
+ pull_request a develop o production: solo corre el job de CI. No publica ni despliega.
 ```
 
-Dos caminos llegan a la VM y los dos son **desde GitHub Actions**: la VM no corre ningún script ni guarda
-archivos del proyecto (ver [VM_LIMPIA.md](VM_LIMPIA.md)).
+Hay **un solo camino** a la VM: un push a Infra dispara `deploy.yml`. Corre **desde GitHub Actions**: la VM no
+corre ningún script ni guarda archivos del proyecto (ver [VM_LIMPIA.md](VM_LIMPIA.md)).
 
-| Camino | Disparador | Qué actualiza | Velocidad |
-| :--- | :--- | :--- | :--- |
-| `update_service.yml` | Push a un microservicio (`develop` / `production`) | **Ese** servicio | Al instante |
-| `deploy.yml` | Push a Infra (`develop` / `main`), o *Run workflow* | **Todo** el stack (solo cambia lo que difiere) | Al instante |
+`docker-stack.yml` es el registro de qué versión corre en cada ambiente: cada deploy de un microservicio queda
+como un commit `chore: update Docker image ...` en la rama de Infra que corresponde. Ese commit va directo a la
+rama, sin PR. Los PR se abren a mano, de `develop` a `production`, en cada microservicio.
 
 No hay deploys automáticos sin un push: si la VM estaba apagada, al prenderla se corre *Deploy Stack* a mano.
 
@@ -59,22 +56,54 @@ No hay deploys automáticos sin un push: si la VM estaba apagada, al prenderla s
 | :--- | :--- | :--- |
 | Rama de los **microservicios** (App, Runner, AccessManager, UI) | `develop` | **`production`** (`main` / `master` quedaron sin uso) |
 | Rama de **Infra** | `develop` | **`main`** |
-| **Tag** de las imágenes en GHCR | `:develop` | `:production` |
+| **Tag móvil** de las imágenes en GHCR | `:develop` | `:production` |
+| **Tag fijo** de las imágenes en GHCR | `:develop-<sha>` | `:production-<sha>` |
 | **Environment** de GitHub (en Infra) | `develop` | `production` |
 | VM | `snippet26dev.duckdns.org` | `snippet26prod.duckdns.org` |
 
 Cada imagen se publica con dos tags:
-- `:<rama>` (por ejemplo `:develop`): se mueve con cada push. Es el que usa el stack.
-- `:<rama>-<sha del commit>`: fijo. Sirve para volver a una versión exacta a mano.
+- `:<ambiente>-<sha del commit>`: fijo. Es **el que usa el stack**: `update-infra` lo escribe en `docker-stack.yml`.
+- `:<ambiente>` (por ejemplo `:develop`): se mueve con cada push y apunta a la última imagen. El stack no lo usa.
 
 Las imágenes viven en GHCR (`ghcr.io/grupo-14-ingsis/...`). La de la UI se llama `printscript-ui`, y el
 servicio de Swarm, `snippetsearcher-ui`.
+
+### Qué difiere entre `develop` y `main` de Infra
+
+Solo **cuatro líneas de `docker-stack.yml`**: las `image:` de App, Runner, AccessManager y UI. En `develop`
+tienen `develop-<sha>` y en `main`, `production-<sha>`. Todo lo demás (workflows, documentación, configuración y
+el resto del stack) tiene que ser idéntico.
+
+- **No mergear una rama de Infra en la otra.** Esas cuatro líneas cambian en las dos ramas, así que un merge da
+  conflicto. Si se resuelve mal, producción corre imágenes de desarrollo.
+- **Un cambio de otro archivo se aplica en las dos ramas.** Si es un cambio de `docker-stack.yml`, no hay que
+  tocar las cuatro líneas de `image:`.
+- **Para comprobarlo:** `git diff origin/main origin/develop --stat` tiene que mostrar solo `docker-stack.yml`,
+  con 4 líneas cambiadas.
+
+Para pasar un archivo de `develop` a `main`:
+```bash
+git switch main
+git pull
+git checkout origin/develop -- <archivo>     # nunca docker-stack.yml entero
+git commit -m "..."
+git push
+```
 
 ---
 
 ## 3. CI/CD de cada microservicio
 
-Archivo: `.github/workflows/ci-cd.yml` (UI: `ci.yaml`). Se dispara con **cualquier push, a cualquier rama**.
+Archivo: `.github/workflows/ci-cd.yml` (UI: `ci.yaml`). Se dispara con un **push** o un **pull request** a
+`develop` o `production`. Las ramas de features no disparan nada hasta que se abre un PR.
+
+| Evento | Job de CI | `build-and-push` y `update-infra` |
+| :--- | :--- | :--- |
+| `pull_request` | Corre | Se saltean |
+| `push` (también el merge de un PR) | Corre | Corren si pasó el CI |
+
+En la lista de Actions, un run de PR lleva el título del PR y uno de push, el mensaje del commit. Un push a una
+rama con un PR abierto dispara los dos.
 
 ### Servicios Kotlin (App, Runner, AccessManager)
 
@@ -87,14 +116,14 @@ Archivo: `.github/workflows/ci-cd.yml` (UI: `ci.yaml`). Se dispara con **cualqui
 | `jacocoTestCoverageVerification` | Cobertura mínima (App y AccessManager 80%, Runner 65%) | Bloquea |
 | `build` | Arma el `.jar` | Bloquea |
 | `build-and-push` (otro job, `needs: ci-cd`) | `docker build` + push a GHCR con `GITHUB_TOKEN` | No hay imagen nueva |
-| Dispatch | Avisa a Infra (sección 4) | No se despliega |
+| `update-infra` (otro job, `needs: build-and-push`) | Escribe la versión en Infra (sección 4) | No se despliega |
 
 El job `build-and-push` solo corre si `ci-cd` pasó: **una imagen publicada siempre pasó lint y tests.**
 El Runner necesita el token también para compilar (`GITHUB_TOKEN` como build-arg): baja el intérprete de
 PrintScript desde GitHub Packages.
 
 ### UI (printscript-ui)
-`npm ci` → `npm run lint` → `npm test --if-present` → `npm run build` → `docker build` + push → dispatch.
+`npm ci` → `npm run lint` → `npm test --if-present` → `npm run build` → `docker build` + push → `update-infra`.
 - `npm test --if-present` **no ejecuta nada**: no hay script `test`, así que Cypress no corre en CI.
 - Las variables `VITE_AUTH0_*` se pasan como build-args (Vite las embebe en el bundle al compilar).
 - En el navegador, la URL del backend sale de `window.location.origin` cuando no es `localhost`, así que la
@@ -102,94 +131,58 @@ PrintScript desde GitHub Packages.
 
 ---
 
-## 4. Dispatch a Infra
+## 4. Escritura de la versión en Infra
 
-El último paso de cada microservicio:
+El job `update-infra` es igual en los cuatro microservicios. Primero se traduce la rama, porque los nombres no
+coinciden entre repos:
+
 ```bash
-curl -X POST -H "Authorization: Bearer $PAT" \
-  https://api.github.com/repos/Grupo-14-INGSIS/SnippetSearcher-Infrastructure/dispatches \
-  -d '{"event_type":"new-image-ready","client_payload":{"environment":"<rama>","service":"snippetsearcher-app"}}'
-```
-- **`repository_dispatch`** es un evento de GitHub que dispara workflows *en otro repo*. Así cada
-  microservicio no necesita saber nada de la VM: solo avisa "hay imagen nueva de X en la rama Y".
-- Usa `PAT` (secret de la organización) porque el `GITHUB_TOKEN` de un repo no puede disparar workflows en otro.
-- `environment` es la **rama del microservicio**, no un environment de GitHub (aunque Infra la usa para elegirlo).
+# Job build-and-push, paso "Store new image version"
+echo "version=${GITHUB_REF_NAME}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-### Cómo sabe Infra de qué servicio y de qué ambiente viene
-
-Todo llega por el mismo workflow (`update_service.yml`), así que la única forma de distinguir es el
-**`client_payload`** del dispatch. Infra no adivina nada: lee dos campos.
-
-```json
-{
-  "event_type": "new-image-ready",
-  "client_payload": {
-    "service": "snippetsearcher-runner",   ← QUÉ servicio
-    "environment": "production"            ← DE QUÉ ambiente
-  }
-}
+if [[ "$GITHUB_REF_NAME" == "production" ]]; then
+echo "branch=production" >> "$GITHUB_OUTPUT"      # tag móvil de la imagen
+echo "infra_branch=main" >> "$GITHUB_OUTPUT"      # rama de Infra
+else
+echo "branch=develop" >> "$GITHUB_OUTPUT"
+echo "infra_branch=develop" >> "$GITHUB_OUTPUT"
+fi
 ```
 
-| Campo | De dónde sale | Ejemplo |
-| :--- | :--- | :--- |
-| `service` | **Escrito a mano** en el `ci-cd.yml` de cada repo: cada uno manda siempre su propio nombre | Runner → `snippetsearcher-runner`, App → `snippetsearcher-app`, AccessManager → `snippetsearcher-accessmanager`, UI → `snippetsearcher-ui` |
-| `environment` | `$GITHUB_REF_NAME`: la **rama** donde se pusheó | push a `develop` → `develop`; push a `production` → `production` |
-
-Qué hace `update_service.yml` con cada uno:
-
-| Dato | Se usa para | `runner` + `production` | `ui` + `develop` |
+| Push a | Tag móvil (`branch`) | Tag fijo (`version`) | Rama de Infra (`infra_branch`) |
 | :--- | :--- | :--- | :--- |
-| `environment` | Elegir el **environment de GitHub** → sus `SSH_HOST` / `SSH_USER` / `SSH_PRIVATE_KEY` → **a qué VM** va | `production` → VM de prod | `develop` → VM de dev |
-| `environment` | **Tag** de la imagen | `:production` | `:develop` |
-| `service` | **Repo de la imagen** en GHCR | `snippetsearcher-runner` | `printscript-ui` (la UI se llama distinto) |
-| `service` | **Servicio de Swarm** a actualizar | `snippetsearcher_snippetsearcher-runner` | `snippetsearcher_snippetsearcher-ui` |
+| `develop` | `:develop` | `:develop-<sha>` | `develop` |
+| `production` | `:production` | `:production-<sha>` | `main` |
 
-```yaml
-# update_service.yml
-environment: ${{ github.event.client_payload.environment == 'production' && 'production' || 'develop' }}
-if: contains(fromJSON('["develop", "production"]'), github.event.client_payload.environment)
-env:
-  SERVICE_NAME: ${{ github.event.client_payload.service }}       # qué servicio
-  BRANCH: ${{ github.event.client_payload.environment }}         # de qué ambiente (y tag)
+Después, `update-infra`:
+
+1. Hace checkout de Infra en `infra_branch`, con el `PAT`.
+2. Reemplaza la versión en la línea `image:` de ese servicio con `sed`. Si no la encuentra, falla.
+3. Si la versión ya estaba, termina sin commit.
+4. Hace commit como `github-actions[bot]`, `git pull --rebase` y `git push` directo a la rama, sin PR.
+
+Ese push dispara `deploy.yml`. Usa `PAT` porque el `GITHUB_TOKEN` de un repo no puede escribir en otro, y un
+push hecho con `GITHUB_TOKEN` tampoco dispararía workflows.
+
+**Choque entre repos.** Si dos microservicios escriben en la misma rama de Infra en el mismo momento, el paso
+`Update image version` de uno puede fallar. La imagen ya quedó publicada: alcanza con **Re-run failed jobs** en
+ese run. Para evitarlo, mergear a `production` de a un microservicio, esperando que termine el run anterior.
+
+**Volver a una versión anterior.** Revertir en la rama de Infra el commit `chore: update Docker image ...`:
+```bash
+git revert <commit>
+git push
 ```
-
-Resultado para `runner` + `production`:
-```
-DOCKER_HOST=ssh://<SSH_HOST de production>
-docker service update --image ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production@sha256:… \
-  snippetsearcher_snippetsearcher-runner
-```
-
-La concurrencia también usa los dos campos (`deploy-<environment>-<service>`): un update a la vez por servicio
-y ambiente, sin que el de un servicio cancele el de otro.
-
-`deploy.yml` no necesita esto: no actualiza un servicio sino **todo el stack**, y el ambiente sale de la
-**rama de Infra** que se pusheó (`develop` → VM de dev, `main` → VM de prod con imágenes `:production`).
+El push despliega la versión anterior. La imagen tiene que seguir en GHCR, y el próximo push de ese servicio
+vuelve a escribir su versión, así que el código con problemas también hay que corregirlo en su repo.
 
 ---
 
-## 5. `update_service.yml`: actualizar un servicio
+## 5. `update_service.yml`: sin uso
 
-Se dispara con `repository_dispatch` de tipo `new-image-ready`.
-
-```yaml
-environment: ${{ github.event.client_payload.environment == 'production' && 'production' || 'develop' }}
-if: contains(fromJSON('["develop", "production"]'), github.event.client_payload.environment)
-```
-
-1. **Filtra ramas.** Solo `develop` y `production`. Las de features (`caso9`, `12y15`, ...) también publican
-   imagen y hacen dispatch, pero se saltean. Antes no se filtraban: pisaban la VM de dev con la imagen de la
-   feature, y GitHub creaba un environment por cada rama (por eso hay environments `caso9`, `12y15`, etc.).
-2. **Valida el servicio** contra la lista conocida.
-3. **Resuelve el digest** de `ghcr.io/...:<rama>` en el runner (`docker buildx imagetools inspect`).
-4. **Actualiza el servicio pineando el digest**:
-   `DOCKER_HOST=ssh://vm docker service update --with-registry-auth --image <imagen>:<rama>@<digest> snippetsearcher_<servicio>`.
-   Con el digest, Swarm baja exactamente esa imagen. Con solo el tag podría reutilizar una imagen cacheada en el
-   nodo y quedar con la versión vieja aunque el workflow termine en verde.
-
-**Concurrencia**: un grupo por ambiente y servicio (`deploy-<rama>-<servicio>`). Si fuera uno solo por ambiente,
-GitHub cancelaría ("superseded") los runs pendientes cuando llegan varios dispatches juntos (App, Runner y UI a la
-vez) y algún servicio quedaría sin actualizar.
+Es el workflow del esquema anterior: recibía un `repository_dispatch` de tipo `new-image-ready` y actualizaba un
+solo servicio. **Ningún microservicio lo dispara desde noviembre de 2026**, porque todos pasaron a `update-infra`.
+Sigue en el repo, pero no interviene en ningún deploy.
 
 ---
 
@@ -203,12 +196,14 @@ Disparadores:
 
 | Paso | Qué hace |
 | :--- | :--- |
-| SSH | Escribe la clave (`SSH_PRIVATE_KEY`), agrega la VM a `known_hosts` y define `DOCKER_HOST=ssh://vm`. |
+| SSH | `webfactory/ssh-agent` carga `SSH_PRIVATE_KEY` y se agrega la VM a `known_hosts`. |
 | Login GHCR | En el runner, con `PAT`. |
 | Hash de configs | Calcula el hash de `app.conf` y de los SQL (los configs de Swarm son inmutables; ver VM_LIMPIA). |
-| Deploy | `docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml snippetsearcher` |
-| Verificación | Espera (hasta 20 min) a que App, Runner, AccessManager y UI corran **exactamente el digest actual** de su tag. Si alguno hizo rollback (por ejemplo, la VM no pudo bajar la imagen), falla en rojo y muestra el error de las tareas. |
+| Contexto de Docker | Crea `swarm-vm` (`ssh://<SSH_USER>@<SSH_HOST>`): los comandos de Swarm corren contra la VM. |
+| Deploy | `docker --context swarm-vm stack deploy --with-registry-auth --resolve-image always --compose-file docker-stack.yml snippetsearcher` |
+| Verificación | Espera (hasta 40 min) a que App, Runner, AccessManager y UI corran **exactamente el digest de la imagen que pide `docker-stack.yml`**. Si alguno hizo rollback (por ejemplo, la VM no pudo bajar la imagen), falla en rojo y muestra el error de las tareas. |
 | Limpieza | Recién después de la verificación: borra configs viejos que nadie usa e imágenes sin uso. |
+| Estado | `docker stack services snippetsearcher`. |
 
 **Para qué está el `docker image prune`.** Para que no se llene el disco de la VM. Cada deploy baja una
 imagen nueva de App, Runner, AccessManager y UI (las de Java pesan cientos de MB cada una) y **la vieja no se
@@ -236,14 +231,14 @@ tienen el mismo nombre (mismo hash), no hay diferencia y no se toca ningún serv
 filtrar qué archivos dispararon el push: uno de docs termina sin cambios. Antes el script forzaba
 `docker service update --force` de todos los servicios y cada push de Infra eran ~4 minutos de 502.
 
-**VM apagada.** Si se pushea (a Infra o a un microservicio) con la VM apagada, el job falla con `i/o timeout`
-y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía; para traer lo último: *Actions → Deploy Stack →
-Run workflow* sobre `develop` (dev) o `main` (prod). Como `--resolve-image always` trae el digest actual de cada
-tag, ese único run pone al día todos los servicios, también los que vinieron por dispatch.
+**VM apagada.** Si se pushea (a Infra o a un microservicio) con la VM apagada, Deploy Stack falla al conectarse
+(`i/o timeout` o error en `Add VM to known hosts`) y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía;
+para traer lo último: *Actions → Deploy Stack → Run workflow* sobre `develop` (dev) o `main` (prod). Ese único run
+pone cada servicio en la versión anotada en `docker-stack.yml`. Si fallaron varios deploys seguidos, alcanza con
+ese run: cada commit ya quedó en la rama.
 
-**Concurrencia**: `stack-<rama>`, un deploy del stack a la vez por ambiente. No comparte grupo con
-`update_service.yml`: si los dos corren a la vez, el `docker image prune` del final podría borrar capas que el
-otro está bajando (es raro: los pushes a Infra son poco frecuentes).
+**Concurrencia**: `stack-<rama>`, un deploy del stack a la vez por ambiente. Si llegan varios pushes seguidos,
+GitHub deja en espera solo el último, que igual despliega el `docker-stack.yml` completo.
 
 ---
 
@@ -258,8 +253,8 @@ repositorio y después en la organización.
 | `SSH_HOST` | Secret | env `develop` / `production` | Infra | IP o host de cada VM |
 | `SSH_USER` | Secret | env `develop` / `production` | Infra | Usuario SSH (tiene que poder usar `docker` sin sudo) |
 | `SSH_PRIVATE_KEY` | Secret | env `develop` / `production` | Infra | Clave privada; la pública está en `~/.ssh/authorized_keys` de la VM |
-| `PAT` | Secret | organización | Microservicios e Infra | Dispatch a Infra y login a GHCR desde Infra (las imágenes son privadas: Swarm las baja con esta credencial) |
-| `GHCR_USER` | Secret | organización | Infra | Usuario del login a GHCR |
+| `PAT` | Secret | organización | Microservicios e Infra | Commit en Infra desde `update-infra` y login a GHCR desde Infra (las imágenes son privadas: Swarm las baja con esta credencial) |
+| `GHCR_USER` | Secret | organización | Solo `update_service.yml`, sin uso | Usuario del login a GHCR del esquema anterior. `deploy.yml` usa `github.actor` |
 | `GITHUB_TOKEN` | Automático | cada run | Microservicios | Push de la imagen a GHCR y paquetes de PrintScript |
 | `VITE_AUTH0_*`, `VITE_BACKEND_URL` | Secret | repo UI | UI | Build-args del bundle |
 | `DOMAIN_NAME` | **Variable** | env `develop` / `production` | `deploy.yml` | Dominio de nginx y ruta del certificado. Obligatoria. |
@@ -300,10 +295,12 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | Falla | Qué se ve | Qué hacer |
 | :--- | :--- | :--- |
 | Lint, detekt, tests o cobertura | El job `ci-cd` del microservicio en rojo | Arreglar y pushear. No se publicó imagen. |
-| VM apagada durante un push | `update_service.yml` o `deploy.yml` en rojo (`i/o timeout` en el puerto 22) | Prender la VM y correr *Actions → Deploy Stack → Run workflow* (rama `develop` o `main`). |
+| VM apagada durante un push | `deploy.yml` en rojo (`i/o timeout` o error al conectar por SSH) | Prender la VM y correr *Actions → Deploy Stack → Run workflow* (rama `develop` o `main`). |
 | La IP de la VM cambió | `i/o timeout` aunque la VM esté prendida | Actualizar `SSH_HOST` en el environment y DuckDNS; poner la IP como estática en Azure. |
 | La VM no puede bajar la imagen | Tareas `Rejected` con `No such image: ...@sha256:...`, `rollback completed`, y la versión vieja sigue corriendo | `No such image` solo dice que el pull falló. La causa real: `sudo journalctl -u docker \| grep 'pulling image failed'`. Si dice `failed to Lchown ... no such file or directory` o `lease does not exist`, un `docker image prune` borró las capas mientras se bajaban (ver abajo). Si dice `denied` / `unauthorized`, es el token de GHCR. Los workflows fallan en rojo en este caso (antes terminaban en verde). |
-| La versión nueva no arranca | `docker service update` tarda y termina en rollback | La VM sigue con la versión anterior y el workflow falla. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
+| La versión nueva no arranca | La verificación de `deploy.yml` sigue en `Esperando:` y termina en rollback | La VM sigue con la versión anterior y el workflow falla. Ver logs: `docker service logs snippetsearcher_<servicio>`. |
+| Falla `Update image version` en un microservicio | `update-infra` en rojo; la imagen se publicó, pero no aparece el commit en Infra | Suele ser un choque con otro repo que escribió en Infra al mismo tiempo: **Re-run failed jobs** en ese run. Si vuelve a fallar, leer el error del paso. |
+| Falla la verificación por tiempo | `Timeout esperando: <servicios>` a los 40 minutos | Ver el estado con `docker service ps snippetsearcher_<servicio> --no-trunc`. El deploy pudo haber quedado a medias. |
 | Al prender la VM, las JVM no terminan de arrancar | App, Runner y AccessManager en `0/2` durante mucho tiempo, `load average` muy alto (~30 en 2 CPUs), tareas `Failed ... exit (137): unhealthy container` cada pocos minutos | Las 6 JVM compiten por la CPU y ninguna abre el 8080 antes de que el healthcheck la mate, así que vuelven a arrancar en un ciclo. Para cortarlo una vez: `docker service scale <app>=1 <runner>=1 <accessmanager>=1`, esperar `1/1` y volver a `=2`. Prevención: `start_period: 900s` y `-XX:TieredStopAtLevel=1` (§8). |
 | Un servicio no encuentra su base (`UnknownHostException: appdb`) | El servicio se cae con `exit (1)`; en el log, `Unable to determine Dialect without JDBC metadata` y más abajo `Caused by: java.net.UnknownHostException: appdb`. La base está `1/1` y dice `ready to accept connections`. | Swarm perdió el registro DNS de ese servicio (pasa a veces después de un reinicio): tiene su IP virtual pero el nombre no resuelve. Diagnóstico desde otro contenedor: `docker exec <runner> getent hosts appdb` no devuelve nada. Arreglo: `docker service update --force snippetsearcher_appdb` (recrea la tarea y la vuelve a registrar; los datos están en el volumen y no se tocan). |
 | Falta `DOMAIN_NAME` | `deploy.yml` falla con *"DOMAIN_NAME es obligatorio"* | Cargar la variable en el environment. No se tocó nada. |
@@ -314,30 +311,29 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 ## 10. Problemas conocidos
 
 - **Cypress no corre en CI** (la UI no tiene script `test`): los e2e solo corren a mano.
-- **AccessManager también corre en `pull_request`**: en un PR, `GITHUB_REF_NAME` es `<n>/merge` y ese tag de
-  Docker es inválido, así que `build-and-push` falla en los PR.
-- **Ramas con `/`** (por ejemplo `feature/x`) producen un tag inválido y el push de la imagen falla.
-- **Imágenes por cada rama**: cada push de una feature publica una imagen en GHCR que nunca se despliega.
+- **Dos repos pueden chocar al escribir en Infra** (sección 4). `update-infra` no reintenta solo.
+- **`update_service.yml` sigue en el repo** aunque nadie lo dispara, y `GHCR_USER` solo lo usa ese workflow.
 - **Contraseñas en texto plano** en `docker-stack.yml`, y el repo es público. Ver la parte opcional de VM_LIMPIA.
-- **La UI de CI imprime un secret** en el paso *Debug Auth0 Domain* (GitHub lo enmascara, pero sobra).
 
 ---
 
 ## 11. Preguntas para repasar
 
-1. **¿Por qué los microservicios no despliegan directamente en la VM?** Para que solo Infra conozca la VM:
-   cada microservicio publica su imagen y avisa con un `repository_dispatch`.
-2. **¿Por qué `PAT` y no `GITHUB_TOKEN` para el dispatch?** El `GITHUB_TOKEN` solo tiene permisos sobre su
-   propio repo.
-3. **¿Por qué se pinea el digest?** Para que Swarm baje exactamente la imagen recién publicada y no reutilice
-   una cacheada con el mismo tag.
+1. **¿Por qué los microservicios no despliegan directamente en la VM?** Para que solo Infra conozca la VM: cada
+   microservicio publica su imagen y anota la versión en `docker-stack.yml`.
+2. **¿Por qué `PAT` y no `GITHUB_TOKEN` para escribir en Infra?** El `GITHUB_TOKEN` solo tiene permisos sobre su
+   propio repo, y sus pushes no disparan workflows.
+3. **¿Por qué el stack usa el tag fijo?** Para que la versión de cada ambiente quede registrada en Git y se pueda
+   volver atrás con un `git revert`. El digest se usa para verificar que cada réplica corra esa imagen exacta.
 4. **¿Qué pasa si pusheo con la VM apagada?** El deploy falla y nadie lo reintenta. Al prenderla, *Run
    workflow* de *Deploy Stack* trae lo último de todos los servicios.
 5. **¿Por qué un push de docs a Infra no reinicia nada?** `docker stack deploy` solo actualiza servicios cuya
    especificación cambió (digest de imagen o nombre de config).
-6. **¿Por qué el tag de prod es `:production` si la rama de prod de Infra es `main`?** El tag es la rama del
-   microservicio, y en los microservicios la rama de prod es `production`.
+6. **¿Por qué el tag de prod es `:production` si la rama de prod de Infra es `main`?** El tag sale de la rama del
+   microservicio, y ahí la rama de prod es `production`. Por eso `update-infra` traduce `production` a `main`.
 7. **¿Cómo se evita cortar el servicio al actualizar?** `order: start-first` + healthcheck: la réplica nueva
    tiene que estar sana antes de bajar la vieja; si nunca lo está, rollback.
 8. **¿Qué archivos del proyecto hay en la VM?** Ninguno: el stack, la config de nginx y los SQL viajan desde
-   Actions por la API de Docker (`DOCKER_HOST=ssh://`). Solo quedan `~/.ssh` y `/etc/letsencrypt`.
+   Actions por la API de Docker (contexto `swarm-vm` por SSH). Solo quedan `~/.ssh` y `/etc/letsencrypt`.
+9. **¿Por qué no se mergea `develop` en `main` en Infra?** Sus `docker-stack.yml` tienen versiones distintas a
+   propósito: un merge podría poner imágenes de desarrollo en producción.
