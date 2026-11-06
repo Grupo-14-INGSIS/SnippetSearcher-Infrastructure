@@ -93,6 +93,8 @@ Cuando se hace push en `develop` o `production` de un microservicio (`App`, `Run
 3. Ese push dispara `deploy.yml`.
 4. Swarm actualiza **únicamente el servicio cuya imagen cambió, con rolling update (zero-downtime)**.
 
+**Si llegan muchos PR juntos:** cada `update-infra` reintenta hasta 6 veces si rechazan su push, volviendo a aplicar la versión sobre lo último de la rama. Cada microservicio corre un `update-infra` a la vez por rama, y `deploy.yml` corre un deploy a la vez por ambiente; si se acumulan, queda el último, que aplica el `docker-stack.yml` completo. Detalle en [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md).
+
 Un pull request solo corre el CI. `update_service.yml` y `repository_dispatch` pertenecen al esquema anterior y ya no se usan.
 
 ### D. Diferencias entre `develop` y `main` en Infra
