@@ -226,7 +226,21 @@ Disparadores:
 | Redeploy forzado | Solo si corresponde: `docker service update --force` de AccessManager, Runner, App y UI, de a uno y esperando a cada uno. No toca bases, Redis ni Azurite. |
 | Verificación | Espera (hasta 40 min) a que App, Runner, AccessManager y UI corran **exactamente el digest de la imagen que pide `docker-stack.yml`**. Si alguno hizo rollback (por ejemplo, la VM no pudo bajar la imagen), falla en rojo y muestra el error de las tareas. |
 | Limpieza | Recién después de la verificación: borra configs viejos que nadie usa e imágenes sin uso. |
+| Agente de infraestructura | Mantiene el contenedor `newrelic-infra` en la VM. Solo lo recrea si cambió la imagen o la configuración. |
 | Estado | `docker stack services snippetsearcher`. |
+
+**Agente de infraestructura (`newrelic-infra`).** Envía a New Relic las métricas de la VM (`SystemSample`) y de cada
+contenedor (`ContainerSample`). No se instala nada en la VM: Deploy Stack lo levanta con `docker run` por el contexto
+`swarm-vm`, con `--restart unless-stopped`, así que vuelve solo al prender la VM. No va en `docker-stack.yml` porque
+necesita `--privileged` y `--pid=host`, y un servicio de Swarm no los aplica.
+
+- El nombre del host sale de `DOMAIN_NAME` (`snippet26dev` / `snippet26prod`) y el atributo `environment`, de la rama.
+- Si falta el secret `NEW_RELIC_LICENSE_KEY`, el paso solo muestra un warning y no frena el deploy.
+- La versión de la imagen está fija en `deploy.yml`. Para actualizarla, se cambia en las dos ramas.
+- La clave queda en la configuración del contenedor: cualquiera con acceso a Docker en la VM puede leerla con
+  `docker inspect`. New Relic desaconseja pasar secretos por variables de entorno. Se eligió así porque la alternativa
+  es construir una imagen con la clave adentro.
+- Esta imagen no incluye el reenvío de logs. Los logs siguen llegando por el agente de APM.
 
 **Para qué está el `docker image prune`.** Para que no se llene el disco de la VM. Cada deploy baja una
 imagen nueva de App, Runner, AccessManager y UI (las de Java pesan cientos de MB cada una) y **la vieja no se
@@ -360,6 +374,7 @@ repositorio y después en la organización.
 | `SSH_USER` | Secret | env `develop` / `production` | Infra | Usuario SSH (tiene que poder usar `docker` sin sudo) |
 | `SSH_PRIVATE_KEY` | Secret | env `develop` / `production` | Infra | Clave privada; la pública está en `~/.ssh/authorized_keys` de la VM |
 | `PAT` | Secret | organización | Microservicios e Infra | Commit en Infra desde `update-infra` y login a GHCR desde Infra (las imágenes son privadas: Swarm las baja con esta credencial) |
+| `NEW_RELIC_LICENSE_KEY` | Secret | env `develop` / `production` | `deploy.yml` | Clave del agente de infraestructura |
 | `GHCR_USER` | Secret | organización | Solo `update_service.yml`, sin uso | Usuario del login a GHCR del esquema anterior. `deploy.yml` usa `github.actor` |
 | `GITHUB_TOKEN` | Automático | cada run | Microservicios | Push de la imagen a GHCR y paquetes de PrintScript |
 | `VITE_AUTH0_*`, `VITE_BACKEND_URL` | Secret | repo UI | UI | Build-args del bundle |

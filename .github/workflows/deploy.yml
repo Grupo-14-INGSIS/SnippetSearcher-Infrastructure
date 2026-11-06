@@ -197,5 +197,45 @@ jobs:
             | xargs -r docker --context swarm-vm config rm 2>/dev/null || true
           docker --context swarm-vm image prune -f || true
 
+      # Métricas de la VM y de cada contenedor en New Relic, sin instalar nada en la VM. Va con `docker run`
+      # y no en el stack porque necesita --privileged y --pid=host, y un servicio de Swarm no los aplica.
+      # Solo se recrea si cambió la imagen o la configuración: la etiqueta config-hash lo detecta.
+      - name: Ensure New Relic infrastructure agent
+        env:
+          NRIA_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          NR_ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
+          NR_IMAGE: newrelic/infrastructure:2.0.1
+        run: |
+          set -euo pipefail
+          if [ -z "$NRIA_LICENSE_KEY" ]; then
+            echo "::warning::Falta el secret NEW_RELIC_LICENSE_KEY: no se despliega el agente de infraestructura"
+            exit 0
+          fi
+          export NRIA_DISPLAY_NAME="${DOMAIN_NAME%%.*}"
+          export NRIA_CUSTOM_ATTRIBUTES="{\"environment\":\"$NR_ENVIRONMENT\"}"
+          config="$(printf '%s' "$NR_IMAGE|$NRIA_LICENSE_KEY|$NRIA_DISPLAY_NAME|$NRIA_CUSTOM_ATTRIBUTES" | sha256sum | cut -c1-12)"
+          current="$(docker --context swarm-vm inspect newrelic-infra --format '{{.State.Running}} {{index .Config.Labels "config-hash"}}' 2>/dev/null || true)"
+          if [ "$current" = "true $config" ]; then
+            echo "El agente ya corre con esta configuración"
+            exit 0
+          fi
+          docker --context swarm-vm rm -f newrelic-infra >/dev/null 2>&1 || true
+          # -e sin valor: Docker toma la clave del entorno del runner y no queda en la línea de comandos
+          docker --context swarm-vm run -d \
+            --name newrelic-infra \
+            --restart unless-stopped \
+            --label "config-hash=$config" \
+            --network=host \
+            --cap-add=SYS_PTRACE \
+            --privileged \
+            --pid=host \
+            --cgroupns=host \
+            -v "/:/host:ro" \
+            -v "/var/run/docker.sock:/var/run/docker.sock" \
+            -e NRIA_LICENSE_KEY \
+            -e NRIA_DISPLAY_NAME \
+            -e NRIA_CUSTOM_ATTRIBUTES \
+            "$NR_IMAGE"
+
       - name: Stack status
         run: docker --context swarm-vm stack services "$STACK"
