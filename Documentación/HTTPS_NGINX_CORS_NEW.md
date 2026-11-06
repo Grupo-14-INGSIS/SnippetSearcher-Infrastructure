@@ -39,7 +39,7 @@ navegador ──HTTPS :443──▶ reverse-proxy (termina TLS con certificado d
 | Servicio de Swarm | `reverse-proxy` (1 réplica) | `snippetsearcher-ui` (2 réplicas) |
 | Puertos | **80 y 443 públicos** | 80 en la red interna de Swarm |
 | Qué hace | Entrada única: desafío ACME, redirige a HTTPS, termina TLS, rutea por path, inyecta `X-Forwarded-*` | **Sirve archivos estáticos**: compresión gzip, headers de seguridad y caché, y SPA fallback a `index.html` |
-| Despliegue | Config de Swarm (`nginx_conf_<hash>`) vía `deploy.yml` | Imagen Docker propia vía `update_service.yml` |
+| Despliegue | Config de Swarm (`nginx_conf_<hash>`) vía `deploy.yml` | Imagen Docker propia vía `update-infra` y `deploy.yml` |
 
 ---
 

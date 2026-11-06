@@ -281,6 +281,6 @@ Para garantizar calidad homogénea y evitar duplicación entre los microservicio
 
 ## 7. Estrategia de Versionado y Tags en Docker Registry (GHCR)
 Para balancear la automatización de despliegues y la trazabilidad inmutable:
-* **Doble Tagging en CI/CD**: Cada imagen se publica con su tag de ambiente flotante (`:develop` o `:production`) para el despliegue automático en Swarm, y con un tag inmutable con el SHA del commit (`:<rama>-<commit>`).
-* **Trazabilidad y Rollbacks**: Los tags con commit generan enlaces directos al commit en la interfaz de GitHub Packages y permiten rollbacks inmediatos a versiones exactas.
+* **Doble Tagging en CI/CD**: Cada imagen se publica con un tag inmutable con el SHA del commit (`:<ambiente>-<commit>`), que es el que `update-infra` escribe en `docker-stack.yml` y Swarm despliega, y con un tag de ambiente flotante (`:develop` o `:production`) que apunta a la última imagen.
+* **Trazabilidad y Rollbacks**: Los tags con commit generan enlaces directos al commit en la interfaz de GitHub Packages, y volver a una versión exacta es revertir su commit en la rama de Infra.
 * Para el detalle exhaustivo, consultar [Estrategia de Tags Docker](ESTRATEGIA_TAGS_DOCKER.md).

@@ -77,11 +77,11 @@ Antes de guardar, el botón **Lint** del editor llama a `POST /api/v1/snippets/{
 5. Al terminar, el Runner compara con los outputs esperados y el App devuelve `SUCCESS` / `FAILED` / `ERROR`.
 
 ## US #10: Ejecución interactiva de un snippet
-1. La UI manda `POST /api/v1/snippets/{id}/executions` (→ **App**). El App chequea permisos en el **AccessManager** y que el snippet exista en **appdb**.
-2. El App llama al **Runner**. El Runner lee el código del **bucket** y lo ejecuta. Cada `println` va a **Redis** (lista `execution:run:...:output`, con estado `RUNNING`/`WAITING`/`COMPLETED`).
-3. Si el snippet pide un input, responde `WAITING`. El usuario lo escribe y la UI manda `POST .../executions/input` (App → Runner), y la ejecución continúa.
-4. La UI consulta `GET .../executions/status?kind=run` (App → Runner → **Redis**) para ir mostrando el output.
-5. `DELETE .../executions` cancela la ejecución (App → Runner).
+1. La UI manda `POST /api/v1/snippets/{id}/executions` (→ **App**) con versión, entorno y la lista de `inputs` ingresados hasta ahora (al principio vacía). El App chequea `shared` u `owner` en el **AccessManager** (`403`) y que el snippet exista en **appdb** (`404`).
+2. El App llama al **Runner**. El Runner lee el código del **bucket** y lo ejecuta con esos inputs. Cada `println` va a **Redis** (lista `execution:run:{userId}:{snippetId}:output`, con estado `RUNNING`/`WAITING`/`COMPLETED`/`ERROR`/`CANCELLED`, TTL 10 min). El `POST` queda bloqueado hasta que el snippet termina, pide un input o pasan 120 s (timeout → `ERROR`).
+3. Si el snippet pide un input que no tiene, el Runner responde `WAITING` con el output hasta ahí y **descarta** la ejecución. El usuario escribe el input y la UI vuelve a mandar el `POST` del paso 1 con la lista ampliada (`[...inputs, nuevo]`). Como el snippet es determinístico, el output se reproduce y la ejecución llega al próximo input o al final. Así el Runner no guarda estado entre requests y funciona con N réplicas.
+4. Mientras el `POST` está en curso, la UI consulta `GET .../executions/status?kind=run` (App → Runner → **Redis**) para ir mostrando el output en vivo, aunque el `GET` caiga en otra réplica.
+5. `DELETE .../executions` cancela la ejecución (App → Runner, usuario tomado del JWT).
 
 ## US #11: Habilitar reglas de formateo
 1. La UI carga las reglas actuales con `GET /api/v1/rules?task=formatting&language=...` (App → **Runner** → **runner-db**).

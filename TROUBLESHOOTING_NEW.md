@@ -32,7 +32,7 @@ Este documento centraliza los problemas comunes, causas raíces y procedimientos
 | **Archivos en host** | Repositorios clonados, `./db/*-init`, `.env` | **VM Limpia**: Sin código fuente, sin `~/.env`, solo `/etc/letsencrypt` |
 | **Puertos expuestos** | `19081-19084`, `5173`, `10000-10002`, `80`, `443` | **Solo 80 y 443** (Nginx perimetral) |
 | **Configs & SQL** | Montaje de carpetas (`volumes: ./...`) | Configs inmutables de Swarm (`nginx_conf_<hash>`, `app_init_<hash>`) |
-| **Actualizaciones** | `docker compose up -d --build` | GitHub Actions (`deploy.yml` y `update_service.yml`) |
+| **Actualizaciones** | `docker compose up -d --build` | GitHub Actions (`update-infra` en cada microservicio y `deploy.yml` en Infra) |
 
 ---
 
@@ -109,7 +109,7 @@ Este documento centraliza los problemas comunes, causas raíces y procedimientos
 * **Prevención:** Asegurarse de tener instalado el servicio [`snippetsearcher-lifecycle`](file:///C:/Users/sergi/faculty/IngenieriaDeSistemas/SnippetSearcher-Infrastructure/vm/snippetsearcher-lifecycle.service) en la VM.
 
 ### 3.4 Rollback en GitHub Actions: 'No such image' o digest mismatch
-* **Síntoma:** `deploy.yml` o `update_service.yml` falla indicando que el servicio hizo rollback.
+* **Síntoma:** `deploy.yml` falla indicando que el servicio hizo rollback.
 * **Causa:** La VM falló al descargar la imagen de GHCR (por timeout de red o porque un `docker image prune` previo interfirió con la descarga).
 * **Diagnóstico en la VM:**
   ```bash

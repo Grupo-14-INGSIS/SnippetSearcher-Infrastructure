@@ -1,16 +1,19 @@
 name: Deploy Stack
 
 # Despliega el stack completo de Swarm cuando hay un push a Infra. Corre desde el runner de Actions
-# contra el Docker de la VM por SSH (DOCKER_HOST=ssh://...): docker-stack.yml, la config de nginx y
+# contra el Docker de la VM por SSH (contexto swarm-vm): docker-stack.yml, la config de nginx y
 # los SQL de init se leen del checkout y viajan por la API de Docker. A la VM no se le copia ningún
 # archivo y no necesita ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
 #
-# Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag (develop / production)
-# a su digest actual y solo actualiza los servicios cuya especificación cambió. Un push que no cambia
+# Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag de docker-stack.yml
+# a su digest y solo actualiza los servicios cuya especificación cambió. Un push que no cambia
 # el stack (por ejemplo, de docs) no reinicia nada.
 #
 # Si se pusheó con la VM apagada: al prenderla, Actions -> Deploy Stack -> Run workflow (rama
-# develop o main) trae todo lo último.
+# develop o main) pone cada servicio en la versión anotada en docker-stack.yml.
+#
+# Este archivo es igual en develop y en main: esas ramas solo difieren en las líneas `image:` de
+# docker-stack.yml. Ver Documentación/PIPELINE_CI_CD.md.
 
 on:
   push:
@@ -35,8 +38,6 @@ jobs:
       cancel-in-progress: false
     env:
       STACK: snippetsearcher
-      # Las ramas de Infra (develop / main) no se llaman igual que las de los microservicios
-      # (develop / production): las imágenes de prod se publican como :production, no :main.
       DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
       NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
       NEW_RELIC_APP_NAME_RUNNER: ${{ vars.NEW_RELIC_APP_NAME_RUNNER }}
@@ -97,15 +98,64 @@ jobs:
 
           docker --context swarm-vm stack deploy \
             --with-registry-auth \
+            --resolve-image always \
             --compose-file "$COMPOSE_FILE" \
             "$STACK"
 
-      - name: Verify stack services
-        run: docker --context swarm-vm stack services "$STACK"
+      # `docker stack deploy` NO espera: le pide el cambio a Swarm y termina mientras la VM sigue bajando
+      # las imágenes. Si un pull falla, Swarm rechaza la tarea ("No such image"), hace rollback y el
+      # workflow terminaría en verde con la versión vieja. Acá se espera a que cada servicio propio corra
+      # exactamente el digest de la imagen que pide docker-stack.yml; si hizo rollback, falla en rojo.
+      - name: Verify every service runs the current image (fail on rollback)
+        run: |
+          expected() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r .digest; }
+          declare -A want
+          for svc in snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager snippetsearcher-ui; do
+            repo="$svc"; [ "$svc" = "snippetsearcher-ui" ] && repo="printscript-ui"
+            # La versión sale del stack: cada rama de Infra tiene las suyas (develop-<sha> / production-<sha>)
+            image="$(grep -E "^[[:space:]]*image:[[:space:]]*ghcr\.io/grupo-14-ingsis/${repo}:" docker-stack.yml | awk '{print $2}')"
+            digest="$(expected "$image")"
+            if [ -z "$image" ] || [ -z "$digest" ] || [ "$digest" = "null" ]; then
+              echo "::error::No se pudo resolver la imagen de $svc en docker-stack.yml: '$image'"
+              exit 1
+            fi
+            want[$svc]="$digest"
+          done
+          deadline=$((SECONDS + 2400))   # start_period de los Spring es 900s y el update va de a una réplica
+          while :; do
+            missing=""
+            for svc in "${!want[@]}"; do
+              # --no-trunc: sin él, docker service ps recorta el digest de la imagen y nunca coincidiría
+              running="$(docker --context swarm-vm service ps "${STACK}_${svc}" --no-trunc --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
+              total="$(echo "$running" | grep -c . || true)"
+              ok="$(echo "$running" | grep -F "${want[$svc]}" | grep -c '^.* Running' || true)"
+              [ "$total" -gt 0 ] && [ "$ok" = "$total" ] || missing="$missing $svc"
+            done
+            [ -z "$missing" ] && { echo "Todos los servicios corren la imagen de docker-stack.yml"; break; }
+            for svc in $missing; do
+              st="$(docker --context swarm-vm service inspect "${STACK}_${svc}" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}')"
+              if [ "$st" = "rollback_completed" ] || [ "$st" = "rollback_paused" ]; then
+                echo "::error::$svc hizo rollback a la versión anterior. Tareas recientes:"
+                docker --context swarm-vm service ps "${STACK}_${svc}" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -n 6
+                echo "::error::Si dice 'No such image', falló el pull en la VM. La causa real está en: sudo journalctl -u docker | grep 'pulling image failed'"
+                exit 1
+              fi
+            done
+            if [ $SECONDS -ge $deadline ]; then echo "::error::Timeout esperando:$missing"; exit 1; fi
+            echo "Esperando:$missing"; sleep 20
+          done
 
+      # Recién ahora, con todas las imágenes ya bajadas y corriendo. Un `docker image prune` mientras la
+      # VM baja una imagen borra las capas a medio extraer ("failed to Lchown ... no such file or
+      # directory", "lease does not exist") y el pull falla: así fallaba el App y el Runner (imágenes
+      # grandes, tardan más que la UI) cuando el prune venía justo después de `docker stack deploy`.
       - name: Clean up unused configs and images
         run: |
+          # Los configs en uso no se pueden borrar: solo se van los de versiones anteriores
           docker --context swarm-vm config ls \
             --filter "label=com.docker.stack.namespace=$STACK" -q \
             | xargs -r docker --context swarm-vm config rm 2>/dev/null || true
           docker --context swarm-vm image prune -f || true
+
+      - name: Stack status
+        run: docker --context swarm-vm stack services "$STACK"

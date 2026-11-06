@@ -1,7 +1,7 @@
 # Guía Operativa de Producción: Docker Swarm y Mantenimiento
 
 > **Estado verificado (Noviembre 2026):**  
-> El ambiente de **Producción** (`https://snippet26prod.duckdns.org`, VM Azure `4.222.216.199`) ya se encuentra completamente migrado y operativo bajo **Docker Swarm**. Todos los 12 servicios corren con la imagen `:production`, las réplicas stateless están en 2/2, la base de datos `appdb` tiene la columna `compliant boolean`, el home del usuario `azureuser` está 100% limpio y la renovación SSL con `certbot` en contenedor (modo webroot) está validada y funcionando.
+> El ambiente de **Producción** (`https://snippet26prod.duckdns.org`, VM Azure `4.222.216.199`) ya se encuentra completamente migrado y operativo bajo **Docker Swarm**. Todos los 12 servicios corren con su imagen de producción (`:production-<commit>` en los microservicios), las réplicas stateless están en 2/2, la base de datos `appdb` tiene la columna `compliant boolean`, el home del usuario `azureuser` está 100% limpio y la renovación SSL con `certbot` en contenedor (modo webroot) está validada y funcionando.
 
 ---
 
@@ -11,8 +11,10 @@
 
 | Repositorio | Rama Prod | Tag de Imagen | Disparador / Workflow |
 | :--- | :---: | :---: | :--- |
-| **Microservicios** (`App`, `Runner`, `AccessManager`, `printscript-ui`) | `production` | `:production` y `:production-<commit>` | Push a `production` → CI compila imagen, publica en GHCR y envía `repository_dispatch` → `update_service.yml` actualiza el servicio en la VM pineando el digest con rolling update. |
-| **Infraestructura** (`SnippetSearcher-Infrastructure`) | `main` | N/A | Push a `main` o *Run workflow* manual → `deploy.yml` conecta por `DOCKER_HOST=ssh://vm`, inyecta Swarm Configs inmutables con hash SHA256 y despliega el stack completo sin tocar archivos en la VM. |
+| **Microservicios** (`App`, `Runner`, `AccessManager`, `printscript-ui`) | `production` | `:production` y `:production-<commit>` | Merge o push a `production` → CI compila imagen, publica en GHCR y el job `update-infra` escribe `:production-<commit>` en `docker-stack.yml` de la rama `main` de Infra. Ese push dispara `deploy.yml`. |
+| **Infraestructura** (`SnippetSearcher-Infrastructure`) | `main` | N/A | Push a `main` o *Run workflow* manual → `deploy.yml` conecta con el contexto de Docker `swarm-vm`, inyecta Swarm Configs inmutables con hash SHA256, despliega el stack completo sin tocar archivos en la VM y verifica que cada servicio corra la imagen pedida. |
+
+`main` solo difiere de `develop` en las cuatro líneas `image:` de `docker-stack.yml`, y las ramas de Infra **no se mergean entre sí**. Ver [Pipeline CI/CD](Documentación/PIPELINE_CI_CD.md).
 
 ---
 
@@ -30,10 +32,10 @@ uh69qbb5kmq8   snippetsearcher_certbot                         replicated   1/1 
 jpqge9u6t341   snippetsearcher_redis                           replicated   1/1        redis:7                          
 yopllwpftxzd   snippetsearcher_reverse-proxy                   replicated   1/1        nginx:stable-alpine                                                *:80->80/tcp, *:443->443/tcp
 yud8pjo2sy3j   snippetsearcher_runner-db                       replicated   1/1        postgres:16                      
-r8542wtrdtak   snippetsearcher_snippetsearcher-accessmanager   replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production
-nsw0s2t6ovio   snippetsearcher_snippetsearcher-app             replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-app:production
-0kmwqvioju8v   snippetsearcher_snippetsearcher-runner          replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production
-wvwdv6ohnb6s   snippetsearcher_snippetsearcher-ui              replicated   2/2        ghcr.io/grupo-14-ingsis/printscript-ui:production
+r8542wtrdtak   snippetsearcher_snippetsearcher-accessmanager   replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production-<commit>
+nsw0s2t6ovio   snippetsearcher_snippetsearcher-app             replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-<commit>
+0kmwqvioju8v   snippetsearcher_snippetsearcher-runner          replicated   2/2        ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production-<commit>
+wvwdv6ohnb6s   snippetsearcher_snippetsearcher-ui              replicated   2/2        ghcr.io/grupo-14-ingsis/printscript-ui:production-<commit>
 ```
 
 * **Puertos externos:** Solo `reverse-proxy` expone `80` y `443`. Los microservicios no tienen puertos publicados hacia internet.
@@ -257,4 +259,4 @@ docker exec -it $(docker ps -q -f name=snippetsearcher_certbot) certbot renew --
 Si la máquina virtual estuvo apagada durante commits a `main` o a microservicios:
 1. Enciende la VM en Azure y verifica que la IP pública coincida con DuckDNS (`snippet26prod.duckdns.org`).
 2. En GitHub: entra a **Actions** → **Deploy Stack** → **Run workflow** (sobre la rama `main`).
-3. El workflow conectará por SSH y reconciliará todos los servicios con las imágenes más recientes en GHCR.
+3. El workflow conectará por SSH y pondrá cada servicio en la versión anotada en `docker-stack.yml`.

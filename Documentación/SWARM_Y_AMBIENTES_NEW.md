@@ -78,28 +78,24 @@ jobs:
 
 ### B. Flujo de Despliegue de Infraestructura (`deploy.yml`)
 1. Checkout del repositorio en GitHub Actions.
-2. Configura clave SSH y establece `DOCKER_HOST=ssh://vm`.
-3. Inicia sesión en GHCR dentro del runner de Actions con el secret `PAT`.
-4. Calcula los hashes SHA256 de `app.conf`, `50x.html` y los scripts SQL de inicialización.
-5. Ejecuta `docker stack deploy --with-registry-auth --resolve-image always -c docker-stack.yml snippetsearcher`.
-6. **Verificación anti-rollback:** Inspecciona los digests de cada microservicio con `--no-trunc`. Si Swarm hace rollback por falla de arranque o descarga, el job falla en rojo con el detalle del error.
+2. Configura la clave SSH, agrega la VM a `known_hosts` e inicia sesión en GHCR dentro del runner de Actions con el secret `PAT`.
+3. Calcula los hashes SHA256 de `app.conf`, `50x.html` y los scripts SQL de inicialización.
+4. Crea el contexto de Docker `swarm-vm` (`ssh://<SSH_USER>@<SSH_HOST>`).
+5. Ejecuta `docker --context swarm-vm stack deploy --with-registry-auth --resolve-image always --compose-file docker-stack.yml snippetsearcher`.
+6. **Verificación anti-rollback:** Espera hasta 40 minutos a que cada microservicio corra el digest de la imagen que pide `docker-stack.yml`. Si Swarm hace rollback por falla de arranque o descarga, el job falla en rojo con el detalle del error.
 7. **Limpieza segura:** Ejecuta `docker image prune -f` y remueve configs viejos únicamente tras confirmar que las imágenes ya terminaron de descargarse.
 
-### C. Flujo de Despliegue de Microservicios (`update_service.yml`)
-Cuando se hace commit en un microservicio (`App`, `Runner`, `AccessManager`, `UI`):
-1. El microservicio compila, valida linters, tests, cobertura y publica su imagen en GHCR (`:<rama>` e inmutable `:<rama>-<sha>`).
-2. Dispara un `repository_dispatch` hacia el repositorio de infraestructura (`event_type: new-image-ready`).
-3. El workflow `update_service.yml` maneja concurrencia por servicio y ambiente:
-   ```yaml
-   concurrency:
-     group: deploy-${{ github.event.client_payload.environment }}-${{ github.event.client_payload.service }}
-     cancel-in-progress: false
-   ```
-4. Resuelve el digest actual de la imagen en GHCR (`docker buildx imagetools inspect`) y ejecuta en la VM:
-   ```bash
-   docker service update --with-registry-auth --image "$IMAGE_URI@$DIGEST" "$SWARM_SERVICE"
-   ```
-5. Swarm actualiza **únicamente las 2 réplicas de ese microservicio con rolling update (zero-downtime)**.
+### C. Flujo de Despliegue de Microservicios (`update-infra`)
+Cuando se hace push en `develop` o `production` de un microservicio (`App`, `Runner`, `AccessManager`, `UI`):
+1. El microservicio compila, valida linters, tests y cobertura, y publica su imagen en GHCR (`:<ambiente>` e inmutable `:<ambiente>-<sha>`).
+2. El job `update-infra` escribe la versión inmutable en `docker-stack.yml` de Infra y hace commit directo: `develop` escribe en la rama `develop`, y `production` en la rama `main`.
+3. Ese push dispara `deploy.yml`.
+4. Swarm actualiza **únicamente el servicio cuya imagen cambió, con rolling update (zero-downtime)**.
+
+Un pull request solo corre el CI. `update_service.yml` y `repository_dispatch` pertenecen al esquema anterior y ya no se usan.
+
+### D. Diferencias entre `develop` y `main` en Infra
+Las dos ramas solo difieren en las cuatro líneas `image:` de App, Runner, AccessManager y UI en `docker-stack.yml`. **No se mergean entre sí**: un merge podría poner imágenes de desarrollo en producción. Los demás cambios se aplican en las dos ramas (ver [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md)).
 
 ---
 

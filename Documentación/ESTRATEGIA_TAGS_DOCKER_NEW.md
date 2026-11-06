@@ -22,14 +22,14 @@ En la configuración inicial, cada pipeline de CI/CD publicaba únicamente una e
 
 ## 2. La Solución Adoptada: Doble Etiquetado (`:rama` + `:rama-commit`)
 
-Para mantener lo mejor de ambos mundos sin romper la automatización existente, los workflows de CI/CD publican **dos etiquetas en simultáneo** para cada imagen compilada:
+Los workflows de CI/CD publican **dos etiquetas en simultáneo** para cada imagen compilada:
 
-1. **Tag de Ambiente (Flotante / Mutable)**:
-   * Ejemplo: `ghcr.io/grupo-14-ingsis/snippetsearcher-app:production`
-   * *Propósito*: Sirve como puntero automático a la **última versión estable**. Permite que la infraestructura (`update_service.yml` / Docker Swarm) descargue siempre la última versión sin necesidad de modificar archivos YAML en cada deploy.
-2. **Tag Inmutable de Trazabilidad (`<rama>-<commit>`)**:
+1. **Tag Inmutable (`<ambiente>-<commit>`)**:
    * Ejemplo: `ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-32c0c25a8f...` (o `develop-<sha>`)
-   * *Propósito*: Deja una instantánea permanente en el historial de GHCR.
+   * *Propósito*: Es **el que se despliega**. El job `update-infra` lo escribe en `docker-stack.yml`, así que la versión de cada ambiente queda registrada en Git.
+2. **Tag de Ambiente (Flotante / Mutable)**:
+   * Ejemplo: `ghcr.io/grupo-14-ingsis/snippetsearcher-app:production`
+   * *Propósito*: Apunta siempre a la **última imagen publicada** en ese ambiente. El stack no lo usa; sirve para bajar la última versión a mano.
 
 ```mermaid
 flowchart TD
@@ -39,8 +39,9 @@ flowchart TD
     Build --> Tag2["Tag 2: :production-32c0c25 (Historial inmutable)"]
     Tag1 --> GHCR[(GitHub Packages / GHCR)]
     Tag2 --> GHCR
-    Tag1 -.-> SwarmDeploy["Infraestructura / Swarm (Descarga última versión)"]
+    Tag2 -.-> Infra["docker-stack.yml en Infra (versión desplegada)"]
     Tag2 -.-> GitAudit["Enlace directo clickeable al commit en GitHub"]
+    Infra --> SwarmDeploy["Swarm despliega esa versión exacta"]
 ```
 
 ---
@@ -49,11 +50,13 @@ flowchart TD
 
 ### Ventajas (Pros)
 * **Trazabilidad 100% directa y visual**: En la interfaz web de GitHub Packages, al incluir el SHA del commit en el nombre del tag, GitHub lo reconoce y genera un **enlace directo clickeable al commit** en el repositorio.
-* **Rollback trivial y seguro**: Si un deploy en producción falla, se puede revertir el servicio en el Swarm inmediatamente a una versión específica conocida:
+* **Rollback trivial y seguro**: Si un deploy falla, se revierte en la rama de Infra el commit `chore: update Docker image ...`:
   ```bash
-  docker service update --image ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-<commit_anterior> snippetsearcher_snippetsearcher-app
+  git revert <commit>
+  git push
   ```
-* **Compatibilidad retroactiva total**: El workflow de infraestructura (`update_service.yml`) y el despliegue continuo **no requieren cambios**, ya que siguen escuchando y descargando el tag `:production` o `:develop`.
+  El push dispara `deploy.yml` y vuelve a la versión anterior. La imagen tiene que seguir en GHCR.
+* **Historial de versiones en Git**: Cada deploy es un commit en Infra, y `docker-stack.yml` muestra qué versión corre en cada ambiente.
 * **Diferenciación clara de ambientes**: Al usar `<rama>-<commit>` en lugar de solo `<commit>`, se distingue de un vistazo si una imagen fue generada para `develop` o para `production`.
 
 ### Desventajas (Contras) y Mitigaciones
@@ -65,21 +68,23 @@ flowchart TD
 
 ## 4. Implementación en los Workflows de CI/CD
 
-### En servicios con comando Docker directo (`SnippetSearcher-App` y `printscript-ui`)
-```yaml
-- name: Build and push Docker image
-  run: |
-    branch=${GITHUB_REF_NAME}
-    commit_sha=${GITHUB_SHA}
-    docker build \
-      -t ghcr.io/grupo-14-ingsis/snippetsearcher-app:$branch \
-      -t ghcr.io/grupo-14-ingsis/snippetsearcher-app:$branch-$commit_sha .
-    docker push ghcr.io/grupo-14-ingsis/snippetsearcher-app:$branch
-    docker push ghcr.io/grupo-14-ingsis/snippetsearcher-app:$branch-$commit_sha
-```
+Los cuatro repos publican las dos etiquetas con `docker/build-push-action`. Los nombres de las ramas no coinciden entre repos, así que el paso `Store new image version` calcula tres valores:
 
-### En servicios con `docker/build-push-action` (`SnippetSearcher-Runner` y `SnippetSearcher-AccessManager`)
 ```yaml
+- name: Store new image version
+  id: version
+  run: |
+    echo "version=${GITHUB_REF_NAME}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+    # Las ramas no se llaman igual: este repo usa develop/production e Infra usa develop/main
+    if [[ "$GITHUB_REF_NAME" == "production" ]]; then
+    echo "branch=production" >> "$GITHUB_OUTPUT"
+    echo "infra_branch=main" >> "$GITHUB_OUTPUT"
+    else
+    echo "branch=develop" >> "$GITHUB_OUTPUT"
+    echo "infra_branch=develop" >> "$GITHUB_OUTPUT"
+    fi
+
 - name: Build and push Docker image
   uses: docker/build-push-action@v5
   with:
@@ -87,21 +92,23 @@ flowchart TD
     file: ./Dockerfile
     push: true
     tags: |
-      ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${{ github.ref_name }}
-      ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${{ github.ref_name }}-${{ github.sha }}
+      ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${{ steps.version.outputs.branch }}
+      ghcr.io/grupo-14-ingsis/snippetsearcher-runner:${{ steps.version.outputs.version }}
 ```
+
+| Push a | Tag móvil | Tag fijo | Rama de Infra |
+| :--- | :--- | :--- | :--- |
+| `develop` | `:develop` | `:develop-<sha>` | `develop` |
+| `production` | `:production` | `:production-<sha>` | `main` |
 
 ---
 
-## 5. Resolución de Digest en Despliegue Automático (`update_service.yml`)
+## 5. Resolución de Digest en el Despliegue (`deploy.yml`)
 
-Para evitar que Swarm reutilice una imagen cacheada localmente en el nodo y garantice la descarga de la nueva versión:
-1. El workflow resuelve el **digest SHA256** exacto en el runner de GitHub Actions usando `docker buildx imagetools inspect`:
+1. `docker stack deploy --resolve-image always` traduce cada tag de `docker-stack.yml` a su **digest SHA256** antes de actualizar los servicios.
+2. La verificación lee de `docker-stack.yml` la imagen de cada servicio y resuelve su digest en el runner:
    ```bash
-   DIGEST="$(docker buildx imagetools inspect "$IMAGE_URI" --format '{{json .Manifest}}' | jq -r .digest)"
+   image="$(grep -E "^[[:space:]]*image:[[:space:]]*ghcr\.io/grupo-14-ingsis/${repo}:" docker-stack.yml | awk '{print $2}')"
+   digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)"
    ```
-2. Actualiza el servicio en la VM pineando el digest mediante SSH (`DOCKER_HOST=ssh://vm`):
-   ```bash
-   docker service update --with-registry-auth --image "${IMAGE_URI}@${DIGEST}" "snippetsearcher_${SERVICE_NAME}"
-   ```
-3. Verifica que la tarea en ejecución coincida con el digest solicitado; si Swarm hace rollback por falla de arranque, el pipeline falla en rojo inmediatamente.
+3. Espera hasta que todas las réplicas corran ese digest. Si Swarm hace rollback por una falla de arranque, el pipeline falla en rojo. Recién después se ejecuta `docker image prune`.
