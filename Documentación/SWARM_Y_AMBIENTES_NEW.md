@@ -72,7 +72,7 @@ jobs:
   deploy:
     environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
 ```
-- **Sin filtro de paths**: `deploy.yml` es **idempotente**. Con `--resolve-image always` y configs hasheados, si un push (por ejemplo, de documentación) no altera la definición del stack, Swarm no reinicia ningún contenedor.
+- **Sin filtro de paths**: `deploy.yml` es **idempotente**. Con `--resolve-image always` y configs hasheados, si un commit automático o de documentación no altera la definición de un servicio, Swarm no lo reinicia. Un commit humano que toque algo más que archivos `.md` fuerza el reinicio de App, Runner, AccessManager y UI.
 - **Push a `develop` en Infra** $\rightarrow$ Utiliza el environment `develop` de GitHub y despliega en la **VM de Dev** (`snippet26dev.duckdns.org`).
 - **Push / Merge a `main` en Infra** $\rightarrow$ Utiliza el environment `production` de GitHub y despliega en la **VM de Prod** (`snippet26prod.duckdns.org`).
 
@@ -82,8 +82,9 @@ jobs:
 3. Calcula los hashes SHA256 de `app.conf`, `50x.html` y los scripts SQL de inicialización.
 4. Crea el contexto de Docker `swarm-vm` (`ssh://<SSH_USER>@<SSH_HOST>`).
 5. Ejecuta `docker --context swarm-vm stack deploy --with-registry-auth --resolve-image always --compose-file docker-stack.yml snippetsearcher`.
-6. **Verificación anti-rollback:** Espera hasta 40 minutos a que cada microservicio corra el digest de la imagen que pide `docker-stack.yml`. Si Swarm hace rollback por falla de arranque o descarga, el job falla en rojo con el detalle del error.
-7. **Limpieza segura:** Ejecuta `docker image prune -f` y remueve configs viejos únicamente tras confirmar que las imágenes ya terminaron de descargarse.
+6. **Redeploy forzado:** Solo con un commit humano que toque algo más que `.md`: `docker service update --force` de los cuatro microservicios, de a uno.
+7. **Verificación anti-rollback:** Espera hasta 40 minutos a que cada microservicio corra el digest de la imagen que pide `docker-stack.yml`. Si Swarm hace rollback por falla de arranque o descarga, el job falla en rojo con el detalle del error.
+8. **Limpieza segura:** Ejecuta `docker image prune -f` y remueve configs viejos únicamente tras confirmar que las imágenes ya terminaron de descargarse.
 
 ### C. Flujo de Despliegue de Microservicios (`update-infra`)
 Cuando se hace push en `develop` o `production` de un microservicio (`App`, `Runner`, `AccessManager`, `UI`):

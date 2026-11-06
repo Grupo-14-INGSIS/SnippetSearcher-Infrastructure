@@ -109,7 +109,8 @@ las bases, Redis, Azurite) son de Docker y no de Swarm: sobreviven.
 ## Cuándo se despliega
 - **Push a Infra** (`develop` o `main`) → `deploy.yml` despliega **todo el stack**. `docker stack deploy
   --resolve-image always` resuelve cada tag de `docker-stack.yml` a su digest y solo actualiza los servicios cuya
-  especificación cambió: un push que no cambia el stack no reinicia nada.
+  especificación cambió. Un commit humano que toque algo más que archivos `.md` también reinicia App, Runner,
+  AccessManager y UI; un commit automático de `update-infra` actualiza solo su servicio.
 - **Push a un microservicio** (`develop` o `production`) → el job `update-infra` escribe la versión nueva en
   `docker-stack.yml` de Infra (rama `develop` o `main`), y ese push dispara `deploy.yml`.
 - **VM apagada durante un push**: el deploy falla y nadie lo reintenta. Al prenderla, Swarm levanta lo que tenía
