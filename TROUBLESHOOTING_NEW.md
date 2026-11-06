@@ -145,6 +145,17 @@ Este documento centraliza los problemas comunes, causas raíces y procedimientos
   docker image prune -af
   ```
 
+### 3.8 Falla `Update image version` en un microservicio
+* **Síntoma:** El job `update-infra` queda en rojo. La imagen se publicó, pero no aparece el commit en Infra.
+* **Causa:** El paso reintenta hasta 6 veces si otro repo escribió primero, así que un rojo suele indicar otro problema: `PAT` sin permisos (`403` / `denied`) o muchos pushes seguidos.
+* **Solución:** Leer el error del paso. Si fue por acumulación de pushes, alcanza con **Re-run failed jobs**: la imagen ya está en GHCR.
+
+### 3.9 Un commit humano en Infra no reinició los servicios
+* **Síntoma:** En Deploy Stack, el paso `Force redeploy of the microservices` queda `skipped`.
+* **Diagnóstico:** Abrir `Decide whether to force a redeploy` y leer `Forzar reinicio de los microservicios: true` o `false`.
+* **Causas posibles:** El push tocó solo archivos `.md`, el run fue un *Run workflow*, el autor del commit es `github-actions[bot]`, o el run en espera fue reemplazado por otro push.
+* **Solución:** Hacer otro commit humano que toque algo más que `.md`. Las reglas están en [Pipeline CI/CD](Documentación/PIPELINE_CI_CD.md).
+
 ---
 
 ## 4. Problemas de Frontend y Auth0

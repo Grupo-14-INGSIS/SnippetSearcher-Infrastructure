@@ -16,6 +16,8 @@
 
 `main` solo difiere de `develop` en las cuatro líneas `image:` de `docker-stack.yml`, y las ramas de Infra **no se mergean entre sí**. Ver [Pipeline CI/CD](Documentación/PIPELINE_CI_CD.md).
 
+**Varios PR a `production` juntos:** se pueden mergear a la vez. Cada `update-infra` reintenta si otro repo escribió primero en `main`, y Deploy Stack corre de a uno: si se acumulan, queda el último, que aplica todas las versiones. Algunos runs intermedios pueden aparecer como `cancelled`, y es normal.
+
 ---
 
 ## 2. Estado de los Servicios en la VM de Producción
