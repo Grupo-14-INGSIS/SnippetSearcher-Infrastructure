@@ -1,43 +1,52 @@
-# Tests de carga
+# Tests de carga (Locust)
 
-Scripts de [k6](https://k6.io) para generar tráfico y verlo en New Relic. **Correrlos solo contra dev**: la VM tiene 2
-CPUs y la carga afecta a todos los servicios. Detalle de qué mirar en
-[Documentación/NEW_RELIC.md](../Documentación/NEW_RELIC.md), sección 12.
+`locustfile.py` genera tráfico para verlo en New Relic. **Correrlo solo contra dev**: la VM tiene 2 CPUs y la carga
+afecta a todos los servicios. Qué mirar mientras corre: [Documentación/NEW_RELIC.md](../Documentación/NEW_RELIC.md),
+sección 12.
 
-| Script | Qué hace | Duración | Necesita login |
-| :--- | :--- | :--- | :--- |
-| `health.js` | Hasta 20 usuarios contra `/api/actuator/health` | 5 min | No |
-| `api-autenticada.js` | Hasta 10 usuarios listando snippets (y leyendo uno, si se indica). Solo lectura | 5 min | Sí |
+| Usuario | Qué hace | Necesita login |
+| :--- | :--- | :--- |
+| `HealthUser` | Pide `/api/actuator/health` (pasa por nginx, App, Runner y AccessManager) | No |
+| `ApiUser` | Lista tus snippets y, si se indica `SNIPPET_ID`, lee uno. Solo lectura | Sí |
 
-## Cómo correrlos
-
-Con k6 instalado:
+## Instalación
 ```bash
-k6 run -e BASE_URL=https://snippet26dev.duckdns.org load-tests/health.js
+pip install locust
 ```
 
-Sin instalar nada, con Docker (desde la raíz del repo):
+## Con interfaz web
 ```bash
-docker run --rm -i grafana/k6 run -e BASE_URL=https://snippet26dev.duckdns.org - < load-tests/health.js
+locust -f load-tests/locustfile.py --host https://snippet26dev.duckdns.org HealthUser
+```
+Abrí `http://localhost:8089`, elegí la cantidad de usuarios (por ejemplo 20) y la velocidad de arranque (por ejemplo 2
+por segundo), y tocá **Start**. Los gráficos muestran requests por segundo, tiempos y fallas.
+
+## Sin interfaz (5 minutos, 20 usuarios)
+```bash
+locust -f load-tests/locustfile.py --host https://snippet26dev.duckdns.org --headless -u 20 -r 2 -t 5m HealthUser
 ```
 
-## El script con login
-
+## Usuario con login
 Necesita el token de tu propio usuario:
 
 1. Entrá a la app de dev y abrí **DevTools → Network**.
-2. Elegí cualquier request a `/api/v1/...` y copiá el valor del header `Authorization` sin la palabra `Bearer`.
-3. Opcional: copiá el id de un snippet tuyo para que también lo lea.
+2. Elegí un request a `/api/v1/...` y copiá el valor del header `Authorization`, sin la palabra `Bearer`.
+3. Opcional: copiá el id de un snippet tuyo.
 
 ```bash
-k6 run -e BASE_URL=https://snippet26dev.duckdns.org -e TOKEN=<token> -e SNIPPET_ID=<id> load-tests/api-autenticada.js
+# Linux / macOS / Git Bash
+TOKEN=<token> SNIPPET_ID=<id> locust -f load-tests/locustfile.py --host https://snippet26dev.duckdns.org ApiUser
+```
+```powershell
+# PowerShell
+$env:TOKEN="<token>"; $env:SNIPPET_ID="<id>"; locust -f load-tests/locustfile.py --host https://snippet26dev.duckdns.org ApiUser
 ```
 
 El token vence: si aparecen errores `401`, sacá uno nuevo. No lo guardes en el repo ni lo compartas.
 
 ## Qué esperar
-
 - **APM & Services → AppIngsis_dev:** sube el throughput y el tiempo de respuesta.
 - **Alerts:** con el umbral de 0,3 s puede abrirse `Excessive response time` después de unos 5 minutos.
 - **Dashboard `Develop`, página `Infraestructura`:** sube la CPU de la VM y de los servicios.
-- Cada request de `api-autenticada.js` lleva un `X-Request-Id` que empieza con `k6-`, para encontrarlo en New Relic.
+- Cada request lleva un `X-Request-Id` que empieza con `locust-`, para encontrarlo en New Relic:
+  `SELECT count(*) FROM Transaction WHERE request_id LIKE 'locust-%' FACET appName SINCE 1 hour ago`

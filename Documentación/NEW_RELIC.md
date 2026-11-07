@@ -322,13 +322,16 @@ El disparador de `Error overflow` no está probado: depende de que la falta de R
 
 ## 12. Tests de carga
 
-Están en `load-tests/` del repo de Infra, escritos para [k6](https://k6.io). Instrucciones en
+Están en `load-tests/locustfile.py` del repo de Infra, escritos para [Locust](https://locust.io). Instrucciones en
 [load-tests/README.md](../load-tests/README.md).
 
-| Script | Qué hace | Necesita login |
+| Usuario | Qué hace | Necesita login |
 | :--- | :--- | :--- |
-| `health.js` | Sube de 0 a 20 usuarios contra `/api/actuator/health` (pasa por App, Runner y AccessManager) | No |
-| `api-autenticada.js` | Lista los snippets del usuario y, si se indica, lee uno. Solo lectura | Sí: un token propio |
+| `HealthUser` | Pide `/api/actuator/health` (pasa por nginx, App, Runner y AccessManager) | No |
+| `ApiUser` | Lista los snippets del usuario y, si se indica, lee uno. Solo lectura | Sí: un token propio |
+
+Cada request lleva un `X-Request-Id` que empieza con `locust-`:
+`SELECT count(*), average(duration) FROM Transaction WHERE request_id LIKE 'locust-%' FACET appName SINCE 1 hour ago`
 
 Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y throughput), **Traces**, la página
 `Infraestructura` del dashboard (CPU y memoria), y si se dispara `Excessive response time`.
