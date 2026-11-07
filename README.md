@@ -18,7 +18,7 @@ Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`
 * **[Estrategia de Tags Docker](Documentación/ESTRATEGIA_TAGS_DOCKER.md)**: Estrategia de doble etiquetado (`:rama` y `:<rama>-<commit>`), trazabilidad, rollbacks y compatibilidad con Swarm.
 * **[Checklist de Producción](PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
 * **[New Relic](Documentación/NEW_RELIC.md)**: Qué se monitorea (trazas, métricas, Synthetics, logs, dashboards y alertas), dónde verlo, consultas NRQL, cómo seguir un request por su id y cómo mostrar cada alerta.
-* **[Tests de carga](load-tests/README.md)**: Scripts de k6 para generar tráfico en dev y verlo en New Relic.
+* **[Tests de carga](load-tests/README.md)**: Locust para generar tráfico en dev y verlo en New Relic.
 
 ---
 
