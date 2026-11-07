@@ -241,6 +241,7 @@ necesita `--privileged` y `--pid=host`, y un servicio de Swarm no los aplica.
   `docker inspect`. New Relic desaconseja pasar secretos por variables de entorno. Se eligió así porque la alternativa
   es construir una imagen con la clave adentro.
 - Esta imagen no incluye el reenvío de logs. Los logs siguen llegando por el agente de APM.
+- Qué se ve en New Relic, las alertas y cómo usarlo: [NEW_RELIC.md](NEW_RELIC.md).
 
 **Para qué está el `docker image prune`.** Para que no se llene el disco de la VM. Cada deploy baja una
 imagen nueva de App, Runner, AccessManager y UI (las de Java pesan cientos de MB cada una) y **la vieja no se

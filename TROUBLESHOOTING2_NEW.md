@@ -1,5 +1,9 @@
 # Guía de Diagnóstico 2: New Relic, Ambientes y Puertos (SnippetSearcher)
 
+> Este documento trata la configuración del agente y los nombres por ambiente. Para todo lo que se monitorea en New Relic
+> (alertas, Synthetics, dashboards, consultas y cómo seguir un request), ver [Documentación/NEW_RELIC.md](Documentación/NEW_RELIC.md).
+> El Runner de producción reporta como `runnerIngsis`, con minúscula.
+
 Este documento detalla la integración de **New Relic**, la separación de métricas entre **Develop y Producción**, cómo se propagan las variables en **Docker Swarm vs Local**, y la **coexistencia de Localhost con el Reverse Proxy**.
 
 ---
