@@ -322,8 +322,8 @@ El disparador de `Error overflow` no está probado: depende de que la falta de R
 
 ## 12. Tests de carga
 
-Están en `load-tests/locustfile.py` del repo de Infra, escritos para [Locust](https://locust.io). Instrucciones en
-[load-tests/README.md](../load-tests/README.md).
+Están en `load-tests/locustfile.py` del repo de Infra, escritos para [Locust](https://locust.io). Qué hace, cómo
+correrlo, qué mirar y qué alertas puede activar: [LOCUST.md](LOCUST.md).
 
 | Usuario | Qué hace | Necesita login |
 | :--- | :--- | :--- |

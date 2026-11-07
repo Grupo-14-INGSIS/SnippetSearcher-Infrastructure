@@ -1,5 +1,7 @@
 # Tests de carga (Locust)
 
+> Guía completa, con qué mirar y qué alertas puede activar: [Documentación/LOCUST.md](../Documentación/LOCUST.md).
+
 `locustfile.py` genera tráfico para verlo en New Relic. **Correrlo solo contra dev**: la VM tiene 2 CPUs y la carga
 afecta a todos los servicios. Qué mirar mientras corre: [Documentación/NEW_RELIC.md](../Documentación/NEW_RELIC.md),
 sección 12.
