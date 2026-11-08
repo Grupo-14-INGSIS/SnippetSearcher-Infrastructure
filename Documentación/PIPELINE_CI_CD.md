@@ -369,29 +369,73 @@ Un **environment** de GitHub agrupa secrets y variables. El job elige uno con `e
 `secrets.X` y `vars.X` se resuelven contra ese environment. Si un secret no está ahí, GitHub busca en el
 repositorio y después en la organización.
 
-| Nombre | Tipo | Dónde | Lo usa | Para qué |
-| :--- | :--- | :--- | :--- | :--- |
-| `SSH_HOST` | Secret | env `develop` / `production` | Infra | IP o host de cada VM |
-| `SSH_USER` | Secret | env `develop` / `production` | Infra | Usuario SSH (tiene que poder usar `docker` sin sudo) |
-| `SSH_PRIVATE_KEY` | Secret | env `develop` / `production` | Infra | Clave privada; la pública está en `~/.ssh/authorized_keys` de la VM |
-| `PAT` | Secret | organización | Microservicios e Infra | Commit en Infra desde `update-infra` y login a GHCR desde Infra (las imágenes son privadas: Swarm las baja con esta credencial) |
-| `NEW_RELIC_LICENSE_KEY` | Secret | env `develop` / `production` | `deploy.yml` | Clave del agente de infraestructura |
-| `GHCR_USER` | Secret | organización | Solo `update_service.yml`, sin uso | Usuario del login a GHCR del esquema anterior. `deploy.yml` usa `github.actor` |
-| `GITHUB_TOKEN` | Automático | cada run | Microservicios | Push de la imagen a GHCR y paquetes de PrintScript |
-| `VITE_AUTH0_*`, `VITE_BACKEND_URL` | Secret | repo UI | UI | Build-args del bundle |
-| `DOMAIN_NAME` | **Variable** | env `develop` / `production` | `deploy.yml` | Dominio de nginx y ruta del certificado. Obligatoria. |
-| `NEW_RELIC_APP_NAME_*` | **Variable** | env `develop` / `production` | `deploy.yml` | Nombre de cada servicio en New Relic (por defecto `*_dev`) |
+### Qué hay cargado y para qué
 
-`SSH_HOST` y `SSH_DIRECTORY` a nivel repositorio son de una configuración vieja: los workflows actuales no los usan.
+| Nombre | Tipo | Dónde se carga | Para qué |
+| :--- | :--- | :--- | :--- |
+| `SSH_HOST` | Secret | Infra, env `develop` / `production` | IP o host de cada VM |
+| `SSH_USER` | Secret | Infra, env `develop` / `production` | Usuario SSH (tiene que poder usar `docker` sin sudo) |
+| `SSH_PRIVATE_KEY` | Secret | Infra, env `develop` / `production` | Clave privada; la pública está en `~/.ssh/authorized_keys` de la VM |
+| `NEW_RELIC_LICENSE_KEY` | Secret | Infra, env `develop` / `production` | Clave de New Relic para los agentes Java, el agente de infraestructura y Fluent Bit |
+| `DOMAIN_NAME` | **Variable** | Infra, env `develop` / `production` | Dominio (`snippet26dev.duckdns.org` / `snippet26prod.duckdns.org`). Obligatoria |
+| `NEW_RELIC_APP_NAME_APP`, `_RUNNER`, `_ACCESS` | **Variable** | Infra, env `develop` / `production` | Nombre de cada servicio en New Relic (si falta: `*_dev`) |
+| `PAT` | Secret | Organización | Token personal: escribir en el repo de Infra y bajar las imágenes privadas de GHCR |
+| `VITE_AUTH0_DOMAIN`, `_CLIENT_ID`, `_AUDIENCE`, `_REALM`, `VITE_BACKEND_URL` | Secret | Repo de la UI | Configuración de Auth0 y del backend que queda dentro del bundle. No son secretos reales: el navegador los ve |
+| `GITHUB_TOKEN` | Automático | Lo crea GitHub en cada run | Publicar la imagen en GHCR y bajar los paquetes de PrintScript |
+| `GHCR_USER` | Secret | Organización | Sin uso: solo lo lee `update_service.yml`, del esquema anterior |
 
-Cómo llega una variable hasta el contenedor:
+`SSH_HOST` y `SSH_DIRECTORY` a nivel repositorio de Infra también son de una configuración vieja: no los usa ningún
+workflow actual.
+
+### En qué paso se usa cada uno
+
+**Infra, `.github/workflows/deploy.yml`** (job `deploy`, con el environment de la rama):
+
+| Paso | Usa | Qué hace con eso |
+| :--- | :--- | :--- |
+| `env:` del job | `DOMAIN_NAME`, `NEW_RELIC_LICENSE_KEY`, `NEW_RELIC_APP_NAME_*` | Los deja como variables de entorno de todo el job, para que `docker stack deploy` los reemplace en `docker-stack.yml` |
+| Configure SSH | `SSH_PRIVATE_KEY` | Escribe la clave en `~/.ssh` del runner |
+| Add VM to known hosts | `SSH_HOST` | `ssh-keyscan` de la VM |
+| Log in to GitHub Container Registry | `PAT` | Login a GHCR. `--with-registry-auth` le pasa la credencial a Swarm para bajar las imágenes privadas |
+| Create Docker context | `SSH_HOST`, `SSH_USER` | Contexto `swarm-vm` (`ssh://usuario@host`): todos los `docker` que siguen corren en la VM |
+| Ensure New Relic infrastructure agent | `NEW_RELIC_LICENSE_KEY`, `DOMAIN_NAME` | Levanta `newrelic-infra` con la clave y el nombre de host |
+
+**Microservicios, `.github/workflows/ci-cd.yml`** (App, Runner y AccessManager) y **UI, `.github/workflows/ci.yaml`**:
+
+| Paso | Usa | Qué hace con eso |
+| :--- | :--- | :--- |
+| Run tests, Build (Runner) | `GITHUB_TOKEN` | Baja los paquetes de PrintScript de GitHub Packages |
+| Create .env file (UI, job `ci`) | `VITE_*` | Arma el `.env` para el paso siguiente, **Build production bundle**, que comprueba que la UI compila |
+| Log in to GitHub Container Registry | `GITHUB_TOKEN` | Login para publicar la imagen |
+| Build and push Docker image | `GITHUB_TOKEN` en los microservicios, `VITE_*` en la UI | En los microservicios, build-arg para bajar los paquetes de PrintScript. En la UI, build-args que quedan en el bundle |
+| Checkout infrastructure repository (job `update-infra`) | `PAT` | Clona Infra con permiso de escritura para commitear la versión nueva de la imagen |
+
+### Cómo llegan hasta los contenedores
+
 ```
-vars.NEW_RELIC_APP_NAME_APP (environment de GitHub)
-  → env: del job en deploy.yml
-  → docker stack deploy reemplaza ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev} en docker-stack.yml (en el runner)
-  → el servicio arranca con NEW_RELIC_APP_NAME=<valor>
-  → el agente de New Relic de la imagen lo usa como nombre de la app
+Environment de GitHub (develop o production) del repo de Infra
+  │
+  ├─ vars.DOMAIN_NAME ─────────────┐
+  ├─ vars.NEW_RELIC_APP_NAME_* ────┤  env: del job en deploy.yml
+  └─ secrets.NEW_RELIC_LICENSE_KEY ┘
+          │
+          ▼
+  docker stack deploy (en el runner) reemplaza ${...} en docker-stack.yml y se lo manda a Swarm
+          │
+          ├─ reverse-proxy ............ DOMAIN_NAME          → server_name y ruta del certificado
+          ├─ App, Runner, AccessManager NEW_RELIC_APP_NAME   → nombre de la app en New Relic
+          │                             NEW_RELIC_LICENSE_KEY → el agente Java la toma del entorno
+          └─ nginx-logs ............... NEW_RELIC_LICENSE_KEY, DOMAIN_NAME → header de la Log API y atributo domain
+
+  Aparte, con docker run: newrelic-infra ← NEW_RELIC_LICENSE_KEY (como NRIA_LICENSE_KEY) y DOMAIN_NAME
 ```
+
+**Ninguno de estos valores está en el repo.** Los archivos solo tienen `${NOMBRE}`. Quedan visibles para quien
+tenga acceso a la VM (`docker service inspect`), no en GitHub ni en los logs de las Actions, que los muestran como `***`.
+
+**Para cambiar uno:** GitHub → repo de Infra → **Settings → Environments → `develop` o `production`** → editar el
+secret o la variable. Después, correr **Deploy Stack** (Run workflow) o hacer un push a Infra: hasta el próximo deploy
+los contenedores siguen con el valor viejo.
 
 ---
 
