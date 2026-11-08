@@ -127,8 +127,6 @@ client --> nginx : 2. HTTPS (Entrada única)
 
 nginx --> ui : / (Archivos estáticos)
 nginx --> app : /api/* (API Backend)
-nginx --> runner : /runner/* (Ejecución / Código)
-nginx --> access : /access/* (Permisos)
 nginx ..> certbot : Desafío ACME (/.well-known/acme-challenge/ en :80)
 
 app --> access : Consulta permisos (Tiempo real)
@@ -186,7 +184,7 @@ client -right-> auth0 : 1. Autenticación (JWT)
 client --> ui : Usa interfaz web
 
 ui --> app : Llamadas de negocio, metadatos, permisos (/api/v1)
-ui --> runner : Creación, edición y lectura de código (/runner/api/v1)
+app --> runner : Creación, edición y lectura de código (red interna)
 
 app --> access : Consulta permisos síncronos
 access --> accessdb : Persiste roles
@@ -209,7 +207,7 @@ asset --> azurite : Almacena blobs
 
 #### A. Nginx como Reverse Proxy / API Gateway
 * **Seguridad & DMZ**: Oculta la topología interna. Solo los puertos 80 y 443 de Nginx están expuestos a internet; los microservicios corren en una red interna privada.
-* **Ruteo de Rutas**: `/api/*` se reenvía a `App`, `/runner/*` a `Runner`, `/access/*` a `AccessManager` y `/` sirve la SPA de la UI.
+* **Ruteo de Rutas**: `/api/*` se reenvía a `App` y `/` sirve la SPA de la UI.
 * **Terminación SSL & Webroot**: Maneja HTTPS y certificados TLS de Let's Encrypt de forma centralizada con renovación webroot a través de `/var/www/certbot`.
 
 #### B. Redis: Streams de trabajos y estado del linteo
@@ -246,7 +244,7 @@ asset --> azurite : Almacena blobs
 | Aspecto | Arquitectura Vieja | Arquitectura Nueva (Actual) |
 | :--- | :--- | :--- |
 | **Proxy Exterior** | **Contras**: Sin proxy central. El navegador interactuaba directamente con puertos de microservicios (`:19081`, `:19082`). | **Pros (Nginx)**: Proxy inverso único en puertos 80/443. Aísla la red interna, maneja SSL y rutea tráfico. |
-| **Punto de Contacto de la UI** | **Contras**: La UI debía coordinar llamadas a `App` y `Runner` expuestos a internet. | **Pros**: Entrada unificada por dominio HTTPS (`/api/`, `/runner/`). Puertos internos cerrados. |
+| **Punto de Contacto de la UI** | **Contras**: La UI debía coordinar llamadas a `App` y `Runner` expuestos a internet. | **Pros**: Entrada única por dominio HTTPS (`/api/`). Runner y AccessManager solo en la red interna. |
 | **Rol de Redis** | Sin uso claro o mezclado. | **Pros (Cola Pura)**: EXCLUSIVAMENTE cola de mensajería (Redis Streams) para linteo y formateo masivo tolerante a fallos. |
 | **Políticas de Autorización** | Chatty HTTP con posible inconsistencia. | **Pros**: Consulta directa en tiempo real a `AccessManager`. Cero datos obsoletos (*zero stale permissions*). |
 | **Soporte de Lenguajes** | PrintScript hardcodeado dentro del Runner. | **Pros**: Engine Central con Plugins (`LanguageRunner`). Soporta Python, Go o Rust mediante Strategy Pattern. |

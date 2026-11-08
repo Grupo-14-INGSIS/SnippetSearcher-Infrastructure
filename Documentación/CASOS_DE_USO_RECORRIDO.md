@@ -5,8 +5,8 @@
 | Pieza | Qué guarda / hace |
 | :--- | :--- |
 | **Auth0** | Login. Entrega el JWT que viaja en cada request. |
-| **Nginx** | Entrada única. `/` → UI · `/api/` → App · `/runner/` → Runner. |
-| **UI** (`printscript-ui`) | SPA React. Habla con el App y, para el contenido del snippet, con el Runner. |
+| **Nginx** | Entrada única. `/` → UI · `/api/` → App. Runner y AccessManager no están publicados. |
+| **UI** (`printscript-ui`) | SPA React. Habla solo con el App. |
 | **App** | BFF / negocio. Valida el JWT y los permisos, orquesta. |
 | **appdb** (Postgres del App) | Metadatos del snippet (nombre, lenguaje, versión, `compliant`), tests y usuarios. |
 | **AccessManager** + **accessmanager-db** | Permisos `owner` / `shared` de cada snippet. |
@@ -23,14 +23,14 @@ consulta HTTP al **AccessManager**, que lee **accessmanager-db**.
 ---
 
 ## US #1: Crear un snippet mediante archivo
-1. La UI lee el archivo y manda `PUT /runner/api/v1/snippets/{id}` (Nginx → **Runner**) con nombre, descripción, lenguaje, versión y código.
+1. La UI lee el archivo y manda `PUT /api/v1/snippets/{id}` (Nginx → **App**) con nombre, lenguaje y código. El App toma al dueño del token y le pasa todo al **Runner** por la red interna.
 2. El **Runner** valida el código con el parser. Si es inválido, responde `400` con la regla, la línea y la columna, y no sigue.
 3. El Runner guarda el código en el **bucket** (`{id}` y `{id}_original`). Si el bucket falla, responde `502` y no registra nada.
-4. El Runner llama al **App** (`PUT /api/v1/snippets/{id}`). El App guarda los metadatos en **appdb**, le da el permiso `owner` al creador en el **AccessManager** y encola el primer linteo en **Redis** (marca `pending` y hace `XADD` en `snippet-jobs`).
+4. El Runner llama al **App** por la ruta interna (`PUT /internal/snippets/{id}`). El App guarda los metadatos en **appdb**, le da el permiso `owner` al creador en el **AccessManager** y encola el primer linteo en **Redis** (marca `pending` y hace `XADD` en `snippet-jobs`).
 5. Respuesta `201` a la UI. En segundo plano el linteo sigue el recorrido de la US #15, paso 3.
 
 ## US #2: Actualizar un snippet mediante archivo
-1. La UI manda el contenido nuevo con `PATCH /runner/api/v1/snippets/{id}` (→ **Runner**).
+1. La UI manda el contenido nuevo con `PATCH /api/v1/snippets/{id}` (→ **App**). El App chequea que sea el dueño y se lo pasa al **Runner** con el token del usuario.
 2. El **Runner** valida con el parser (`400` con regla, línea y columna si es inválido) y guarda en el **bucket** (`{id}` y `{id}_original`).
 3. El Runner le pide al **App** un `POST .../lint-jobs` con el JWT del usuario. El App chequea permisos, busca al dueño en el **AccessManager** y encola el linteo en **Redis**.
 4. El Runner también dispara los tests del snippet (ver US #16).

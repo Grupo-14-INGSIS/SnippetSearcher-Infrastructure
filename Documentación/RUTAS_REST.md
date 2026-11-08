@@ -64,9 +64,9 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 | Método | Endpoint | Descripción | Auth |
 | :--- | :--- | :--- | :---: |
 | `GET` | `/api/v1/snippets` | Snippets del usuario (propios y compartidos). `compliance`: `pending` / `failed` / `compliant` / `not-compliant` (ver `USO_DE_REDIS.md`). | JWT |
-| `GET` | `/api/v1/snippets/{snippetId}` | Snippet consolidado: metadatos del App + contenido del bucket vía Runner (BFF). | Público* |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Registra los metadatos, da `owner` al creador y encola el primer linteo. `409` si ya existe. Lo llama el Runner al crear. | Público* |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica descripción o versión. | Owner |
+| `GET` | `/api/v1/snippets/{snippetId}` | Snippet consolidado: metadatos del App + contenido del bucket vía Runner (BFF). | Owner o shared |
+| `PUT` | `/api/v1/snippets/{snippetId}` | Crea el snippet. El dueño es el usuario del token. Con `content`, el Runner valida y guarda el código (`201`, o `400` con el error de parseo). `409` si ya existe. | Logueado |
+| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica descripción, versión o, con `content`, el código: el Runner lo valida, lo guarda, pide el linteo y corre los tests. | Owner |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el snippet, sus tests, sus permisos y su contenido en el bucket. | Owner |
 | `POST` | `/api/v1/snippets/{snippetId}/lint-jobs` | Crea un trabajo de linteo asíncrono con las reglas del dueño. `202 Accepted`. | Shared/Owner |
 
@@ -117,16 +117,16 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 
 ---
 
-## 8. Runner (`/runner/api/v1/...`)
+## 8. Runner (solo red interna)
 
-La UI llama al Runner directamente para el **contenido** de los snippets, y el App lo llama para
-todo lo demás (ejecutar, reglas, tareas).
+El Runner no está expuesto a internet: **solo lo llama App**, por la red interna. Para registrar un snippet nuevo,
+el Runner llama a la ruta interna de App `PUT /internal/snippets/{snippetId}`, que tampoco está publicada.
 
 | Método | Endpoint | Descripción | Quién lo llama |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/v1/snippets/{snippetId}` | Contenido del snippet. | App, UI |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Valida, guarda en el bucket y registra en App. `201`, `400` (código inválido o ya existe), `502` (bucket). | UI |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Actualiza el contenido, crea un `lint-job` en App y corre los tests. | UI |
+| `GET` | `/api/v1/snippets/{snippetId}` | Contenido del snippet. | App |
+| `PUT` | `/api/v1/snippets/{snippetId}` | Valida, guarda en el bucket y registra en App por `/internal/`. `201`, `400` (código inválido o ya existe), `502` (bucket). | App |
+| `PATCH` | `/api/v1/snippets/{snippetId}` | Actualiza el contenido, crea un `lint-job` en App y corre los tests. | App |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el contenido del bucket. `204` / `404` / `502`. | App |
 | `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}?userId=&language=&version=` | Formatear o lintear síncrono con las reglas de `userId`. En `lint`, un body de texto opcional reemplaza al código guardado. Antes llamaba al plugin sin reglas y siempre daba `500`. | App |
 | `POST` | `/api/v1/snippets/{snippetId}/executions` | Ejecuta (body con `userId`, `version`, `environment`, `inputs`). | App |
@@ -148,8 +148,8 @@ Nginx es el único punto de entrada (`https://<dominio>`) y reparte el tráfico 
 | :--- | :--- |
 | `/` | `snippetsearcher-ui:80` |
 | `/api/` | `snippetsearcher-app:8080` |
-| `/runner/` | `snippetsearcher-runner:8080/` (le quita el `/runner`) |
-| `/access/` | `snippetsearcher-accessmanager:8080/` |
+
+Runner y AccessManager no tienen ruta pública. Detalle en [SEGURIDAD.md](SEGURIDAD.md).
 
 ---
 
@@ -167,6 +167,7 @@ Nginx es el único punto de entrada (`https://<dominio>`) y reparte el tráfico 
 | `POST` y `PUT /users` | Dos verbos para lo mismo. | Solo `PUT`: es idempotente y se llama en cada login. |
 | Registrar un snippet existente: `400`, o peor, lo **pisaba** | `save()` de JPA sobre un id existente hace *merge* y sobreescribía nombre y metadatos. | Se chequea antes: `409 Conflict` sin tocar nada. |
 | `PATCH /snippets/{id}/status` público y `POST /testing` público | Cualquiera podía marcar un snippet como compliant o meter mensajes en el stream. | Eliminados (ver `USO_DE_REDIS.md`). |
+| `GET` y `PUT /api/v1/snippets/{id}` del App públicos; Runner y AccessManager publicados en `/runner/` y `/access/` sin autenticación | Cualquiera podía leer, crear o borrar snippets ajenos y cambiar permisos. | La UI pasa todo por App, que valida token y permiso. Runner y AccessManager quedan en la red interna. El registro desde el Runner usa `PUT /internal/snippets/{id}`. Ver `SEGURIDAD.md`. |
 | Rutas `/{container}/{snippetId}` en el Runner | Exponían el container del bucket. | Eliminadas (ver `USO_DE_BUCKETS.md`). |
 
 **Impacto en la UI:** ninguno. `printscript-ui` (rama `develop`) ya usaba solo las rutas canónicas. El DELETE de
@@ -186,9 +187,6 @@ Tests nuevos en el App que fijan estas reglas:
 | Tema | Por qué se dejó | Cómo sería lo correcto |
 | :--- | :--- | :--- |
 | `GET /snippets` devuelve un **objeto** `{ id: {...} }` en lugar de una lista, y la paginación la hace la UI | La UI depende de esa forma. Cambiarla obliga a cambiar UI y Cypress juntos. | Una lista `[{id, name, ...}]` con `?page=&pageSize=` y filtros resueltos en el servidor. |
-| `PUT` y `GET /api/v1/snippets/{id}` del App son públicos | El Runner los llama sin JWT al crear y al leer. | Autenticación entre servicios (un secreto compartido o *client credentials* de Auth0) y cerrar estas rutas. |
-| **El Runner no tiene autenticación y es accesible desde internet por `/runner/`**. Sus rutas aceptan `userId` en el body o en query params. | Es así desde el diseño original, y la UI lo usa para crear y editar el contenido. | Que el Runner valide el JWT (como el App) y saque el usuario de ahí, o que la UI pase siempre por el App y el Runner quede solo en la red interna. |
-| `/access/` (AccessManager) también está expuesto por Nginx | Nadie de afuera lo necesita. | Sacar esa `location` de Nginx: solo lo usa el App, por la red interna. |
 | `GET /rules?task=&language=` | Funciona y es claro. | Algo como `/users/me/rules/{task}/{language}` sería más consistente con el Runner. Es cosmético. |
 
 ---

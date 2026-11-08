@@ -19,9 +19,9 @@ navegador ──HTTP :80──▶ reverse-proxy ──301──▶ https://<domi
 
 navegador ──HTTPS :443──▶ reverse-proxy (termina TLS con certificado de Let's Encrypt)
                             ├─ /          ──▶ snippetsearcher-ui:80             (Nginx estáticos de UI)
-                            ├─ /api/      ──▶ snippetsearcher-app:8080          (API Backend)
-                            ├─ /runner/   ──▶ snippetsearcher-runner:8080       (Motor ejecución y código)
-                            └─ /access/   ──▶ snippetsearcher-accessmanager:8080 (Permisos)
+                            └─ /api/      ──▶ snippetsearcher-app:8080          (API Backend)
+
+                            Runner y AccessManager no están publicados: solo App los llama, por la red interna.
 ```
 
 - **Perímetro seguro:** Afuera todo es HTTPS. Adentro, entre Nginx y los servicios, es HTTP plano por la red overlay de Swarm, que no sale de la VM.
@@ -89,8 +89,6 @@ Para evitar detener Nginx al renovar certificados, la validación ACME opera en 
 | `listen 443 ssl; http2 on;` | Terminación TLS con soporte de HTTP/2 |
 | `resolver 127.0.0.11 valid=10s ipv6=off;` | Resuelve los servicios en **cada request** con el DNS interno de Docker |
 | `set $app http://snippetsearcher-app:8080; proxy_pass $app;` | Upstream dinámico en variable para que Nginx levante incluso si el backend está iniciando |
-| `rewrite ^/runner/(.*)$ /$1 break;` | Remueve el prefijo `/runner/` antes de reenviar a Runner |
-| `rewrite ^/access/(.*)$ /$1 break;` | Remueve el prefijo `/access/` antes de reenviar a AccessManager |
 | `error_page 502 503 504 /50x.html;` | Sirve la página de error corporativa limpia cuando un backend está arrancando |
 
 ---

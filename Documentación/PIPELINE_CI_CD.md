@@ -408,7 +408,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | Rollback | `failure_action: rollback`, `monitor: 60s` | Si la versión nueva no pasa el healthcheck, vuelve sola a la anterior. |
 | Reinicio | `restart_policy: condition: any` | Si un contenedor muere, Swarm lo vuelve a levantar. También al reiniciar la VM. |
 | Red interna | DNS de Swarm (`snippetsearcher-app`, `redis`, ...) | Los servicios se encuentran por nombre; el balanceo entre réplicas es automático. |
-| nginx | Único servicio con 80/443 | Entrada pública: `/` → UI, `/api/` → App, `/runner/` → Runner, `/access/` → AccessManager. Resuelve cada servicio **en cada request** (`resolver 127.0.0.11` + `proxy_pass $variable`): arranca aunque el App todavía no exista y esa ruta responde 502 hasta que esté listo. Antes, con el nombre fijo, nginx no levantaba (`host not found in upstream`) mientras el App arrancaba. |
+| nginx | Único servicio con 80/443 | Entrada pública: `/` → UI y `/api/` → App. Runner y AccessManager no están publicados (ver [SEGURIDAD.md](SEGURIDAD.md)). Resuelve cada servicio **en cada request** (`resolver 127.0.0.11` + `proxy_pass $variable`): arranca aunque el App todavía no exista y esa ruta responde 502 hasta que esté listo. Antes, con el nombre fijo, nginx no levantaba (`host not found in upstream`) mientras el App arrancaba. |
 
 ---
 
