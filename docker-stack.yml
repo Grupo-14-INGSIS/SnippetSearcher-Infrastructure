@@ -102,7 +102,7 @@ services:
   # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-bf88a80cebe71961cc40176258b7f41fde5ea8ad
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-09e8b685b2cbc201222b3e3d6b1461f0c9eb6d0a
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
