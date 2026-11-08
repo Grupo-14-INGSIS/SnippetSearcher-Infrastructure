@@ -9,6 +9,7 @@ services:
       - "19081:8080"
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
       JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       DB_USER: app
       DB_PASSWORD: app
@@ -79,6 +80,7 @@ services:
       - "19082:8080"
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
       DB_USER: app
       DB_PASSWORD: app
       DB_NAME: snippet-db
@@ -146,6 +148,7 @@ services:
       - "19083:8080"
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
       DB_USER: access_manager
       DB_PASSWORD: access_manager
       DB_NAME: compose-db
