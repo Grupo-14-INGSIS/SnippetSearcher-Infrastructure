@@ -81,6 +81,8 @@ jobs:
           {
             echo "NGINX_CONF_HASH=$(h reverse-proxy/nginx/conf.d/app.conf)"
             echo "NGINX_50X_HASH=$(h reverse-proxy/nginx/errors/50x.html)"
+            echo "FLUENTBIT_CONF_HASH=$(h reverse-proxy/fluent-bit/fluent-bit.conf)"
+            echo "FLUENTBIT_PARSERS_HASH=$(h reverse-proxy/fluent-bit/parsers.conf)"
             echo "APP_INIT_HASH=$(h db/app-init/01-init-snippet.sql)"
             echo "ACCESSMANAGER_INIT_HASH=$(h db/accessmanager-init/01-init-accessmanager.sql)"
           } >> "$GITHUB_ENV"
