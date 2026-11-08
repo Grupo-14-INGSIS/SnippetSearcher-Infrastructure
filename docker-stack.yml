@@ -166,7 +166,7 @@ services:
   # AccessManager (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-8c9efb76e9163acb26403821f88a119305c7209d
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-691ec5397d5ddfa83eb9d22d9c7a3dd63019edb3
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
