@@ -338,16 +338,23 @@ Para mostrar una alerta: provocar la falla **en dev**, esperar el tiempo de la c
 
 El disparador de `Error overflow` no está probado: depende de que la falta de Redis genere logs `ERROR`.
 
-### Alertas recomendadas para crear
-Cubren lo que la clase marca como faltante. Se crean en **Alerts → Alert Conditions → Add a condition → NRQL**:
+### Saturación, dominio y percentiles (creadas el 8/11/2026)
+Cubren lo que pide la clase: saturación, una métrica de negocio y latencia por percentil. Separan dev y prod por
+`appName`.
 
-| Nombre sugerido | NRQL | Critical | Policy |
-| :--- | :--- | :--- | :--- |
-| `Redis - trabajos sin procesar` | `SELECT max(pending) FROM RedisStreamStatus FACET stream` | `above 50` durante 10 min | `Infraestructura` |
-| `Listas vacías en aumento` | `SELECT percentage(count(*), WHERE count = 0) FROM SnippetsListed` | `above 50` durante 15 min | `Error Rate` |
-| `Latencia p95 alta` (reemplaza a `Excessive response time`, que usa promedio) | `SELECT percentile(duration, 95) FROM Transaction WHERE appName IN ('AppIngsis', 'AppIngsis_dev') FACET appName` | `above 0.3` durante 5 min (demo) o `above 2` | `Error Rate` |
+| Alerta | Policy | NRQL | Dispara si | Cómo mostrarla en dev |
+| :--- | :--- | :--- | :--- | :--- |
+| `Redis - trabajos sin procesar` | `Infraestructura` | `SELECT max(pending) FROM RedisStreamStatus FACET appName, stream` | Más de 50 trabajos sin confirmar durante 10 min | `docker service scale snippetsearcher_snippetsearcher-runner=0` y cambiar las reglas de linteo aplicándolas a varios snippets: los trabajos quedan encolados. Volver con `=2` |
+| `Listas vacías en aumento` | `Error Rate` | `SELECT percentage(count(*), WHERE count = 0) FROM SnippetsListed FACET appName` | Más del 50 % de los listados vienen vacíos durante 15 min (ventanas de 5 min) | Entrar varias veces con un usuario nuevo, sin snippets, y refrescar la lista |
+| `Latencia p95 alta` | `Error Rate` | `SELECT percentile(duration, 95) FROM Transaction WHERE appName IN ('AppIngsis', 'AppIngsis_dev') FACET appName` | p95 > 0,3 s durante 5 min (bajo a propósito para la demo; después, unos 2 s) | Un test de carga ([sección 12](#12-tests-de-carga)) |
 
-Para la latencia, la clase recomienda percentiles: el promedio esconde a los pocos usuarios que esperan mucho.
+Las dos primeras usan eventos que manda App (`RedisStreamStatus` cada 60 s, `SnippetsListed` en cada listado):
+**empiezan a evaluar cuando esté deployada la versión de App que los manda.** Hasta entonces no tienen datos y
+no disparan.
+
+`Latencia p95 alta` y `Excessive response time` (promedio) quedaron las dos activas. La clase recomienda percentiles,
+porque el promedio esconde a los pocos usuarios que esperan mucho. Si suenan juntas en la demo, conviene desactivar
+`Excessive response time`.
 
 ### Ver las alertas disparadas
 `SELECT count(*) FROM NrAiIncident WHERE event = 'open' FACET conditionName, entity.name SINCE 1 day ago`
@@ -419,9 +426,9 @@ Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y thr
   una aplicación *Machine to Machine* en Auth0 con acceso a `https://api.snippets.com`, sus credenciales como
   *Secure credentials* de New Relic, y un monitor *Scripted API* que pida el token y haga las tres llamadas. No está
   hecho. Hoy lo más cercano es el monitor `health`, que prueba App, su base, Redis, Runner y AccessManager.
-- **Alertas recomendadas:** las de la [sección 9](#9-alertas-qué-hace-cada-una-y-cómo-mostrarla) (saturación, listas
-  vacías, latencia por percentil) hay que crearlas en New Relic.
-- **SLO:** hay que crearlo en New Relic (ver [sección 14](#14-sli-slo-y-error-budget)).
+- **Alertas de saturación y de listas vacías:** creadas, pero sin datos hasta que se deploye la versión de App que
+  manda `RedisStreamStatus` y `SnippetsListed` (ver [sección 9](#9-alertas-qué-hace-cada-una-y-cómo-mostrarla)).
+- **Alerta de *burn rate* del SLO:** no está creada (ver [sección 14](#14-sli-slo-y-error-budget)).
 - **Baja de tráfico sin caída:** no se detecta.
 - **Muting rules:** no hay. Cuando se apaga una VM, se disparan varias alertas a la vez.
 - **`Excessive response time` en 0,3 s:** a propósito para la demo; después conviene subirlo a unos 2 s.
@@ -442,17 +449,18 @@ Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y thr
 Se mide **por requests** y no por tiempo: un minuto con la VM apagada y sin usuarios no consume presupuesto, pero
 un error mientras alguien usa la app sí.
 
-**Cómo crearlo en New Relic** (uno por ambiente):
+**En New Relic** (creados el 8/11/2026, uno por ambiente): **Service Levels** (o **APM & Services → `AppIngsis` →
+Service levels**).
 
-1. Andá a **APM & Services**, abrí `AppIngsis` y entrá a **Service levels → Add a service level**.
-2. Elegí **Success** (requests sin error). Si pide las consultas a mano:
-   - Valid events: `FROM Transaction WHERE appName = 'AppIngsis'`
-   - Good events: `FROM Transaction WHERE appName = 'AppIngsis' AND error IS false`
-3. Objetivo: `99` %, período: `28 days`.
-4. Repetí con `AppIngsis_dev`.
+| Service level | Valid events | Good events | Objetivo |
+| :--- | :--- | :--- | :--- |
+| `AppIngsis - requests sin error` | `FROM Transaction WHERE appName = 'AppIngsis'` | `... AND error IS false` | 99 %, 28 días |
+| `AppIngsis_dev - requests sin error` | `FROM Transaction WHERE appName = 'AppIngsis_dev'` | `... AND error IS false` | 99 %, 28 días |
 
-Para un SLI de latencia, en el paso 2 elegí **Latency** con un umbral (por ejemplo, 1 s): cuenta como bueno el request
-que respondió bien y a tiempo.
+La página de cada uno muestra el SLI actual, el cumplimiento del objetivo y cuánto error budget queda.
+
+Para sumar un SLI de latencia: **Add a service level → Latency**, con un umbral (por ejemplo, 1 s). Cuenta como bueno
+el request que respondió bien y a tiempo.
 
 **Para qué sirve:** si queda presupuesto, se puede deployar y experimentar. Si se gastó, se frenan los cambios y se
 prioriza la estabilidad. Una alerta útil es la de *burn rate*: avisa cuando el presupuesto se está gastando más rápido
@@ -471,10 +479,10 @@ de lo normal. New Relic la ofrece al crear el service level.
 | Logs de todos los componentes | ⚠️ | Faltan nginx, asset-service, bases y Redis |
 | Métricas clásicas: tráfico, duración, CPU, memoria, uptime | ✅ | APM, agente de infraestructura y Synthetics |
 | Cuatro señales: latencia, tráfico, errores | ✅ | APM y dashboards |
-| Cuatro señales: saturación | ✅ | `RedisStreamStatus`. Falta crear su alerta |
-| Percentiles para la latencia | ⚠️ | Dashboards con p50/p95/p99. La alerta de latencia usa promedio: hay que crear la de p95 |
+| Cuatro señales: saturación | ✅ | `RedisStreamStatus` y la alerta `Redis - trabajos sin procesar` |
+| Percentiles para la latencia | ✅ | Dashboards con p50/p95/p99 y la alerta `Latencia p95 alta` |
 | Trazas distribuidas | ✅ | Agente Java en los tres servicios |
 | Synthetics | ⚠️ | Página y health del backend. Falta el del flujo de negocio |
-| Métrica de dominio («mis snippets desaparecieron») | ✅ | `SnippetsListed`. Falta crear su alerta |
-| SLI, SLO y error budget | ⚠️ | Definidos en la sección 14. Hay que crearlos en New Relic |
+| Métrica de dominio («mis snippets desaparecieron») | ✅ | `SnippetsListed` y la alerta `Listas vacías en aumento` |
+| SLI, SLO y error budget | ✅ | Service levels de `AppIngsis` y `AppIngsis_dev` (sección 14) |
 | Alertas accionables, sin ruido | ⚠️ | La de 0,3 s y las de VM apagada suenan seguido |

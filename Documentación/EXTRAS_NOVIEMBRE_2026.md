@@ -12,25 +12,34 @@ link de la última columna.
 - [6. Documentación nueva o actualizada](#6-documentación-nueva-o-actualizada)
 - [7. Decisiones tomadas](#7-decisiones-tomadas)
 - [8. Qué queda por hacer](#8-qué-queda-por-hacer)
+- [9. Orden de deploy](#9-orden-de-deploy)
 
 ---
 
 ## 1. Cambios de arquitectura y comportamiento
 
-**Sí, cambiaron.** Lo más importante: **la UI ahora habla solo con App.**
+Para el usuario, la app hace lo mismo. Cambia el camino por dentro y se cierran agujeros de seguridad.
+
+Antes, **la UI ya hablaba casi todo con App**. Solo en tres casos iba directo al Runner por `/runner/`: crear un
+snippet con código, guardar el código editado y, como plan B, leer el contenido. AccessManager nunca lo llamaba
+directo. El problema real era que nginx dejaba **`/runner/` y `/access/` abiertos a internet sin token**: cualquiera
+podía leer, editar o borrar snippets ajenos. Para cerrarlos, primero hubo que pasar esos tres casos a App.
 
 ```
-ANTES                                         AHORA
-UI ──/api/────▶ App                           UI ──/api/──▶ App ──▶ Runner
-UI ──/runner/─▶ Runner      (sin token)                         └──▶ AccessManager
-UI ──/access/─▶ AccessManager (sin token)     Runner ──/internal/──▶ App   (red interna)
+ANTES                                             AHORA
+UI ──/api/────▶ App   (casi todo)                 UI ──/api/──▶ App ──▶ Runner
+UI ──/runner/─▶ Runner (crear con código,                         └──▶ AccessManager
+                        editar código, plan B)    Runner ──/internal/──▶ App   (red interna)
+/runner/ y /access/ abiertos sin token            /runner/ y /access/ cerrados
 ```
 
 | Cambio | Antes | Ahora | Detalle |
 | :--- | :--- | :--- | :--- |
 | Rutas públicas de nginx | `/`, `/api/`, `/runner/`, `/access/` | Solo `/` y `/api/` | [SEGURIDAD.md](SEGURIDAD.md) |
-| Crear un snippet | La UI llamaba al Runner directo | `PUT /api/v1/snippets/{id}` con `content`. App lo pasa al Runner, y el Runner lo registra en App por `/internal/snippets/{id}` | [CASOS_DE_USO_RECORRIDO.md](CASOS_DE_USO_RECORRIDO.md) |
+| Crear un snippet con código | La UI llamaba al Runner directo | `PUT /api/v1/snippets/{id}` con `content`. App lo pasa al Runner, y el Runner lo registra en App por `/internal/snippets/{id}` | [CASOS_DE_USO_RECORRIDO.md](CASOS_DE_USO_RECORRIDO.md) |
 | Editar el código | La UI llamaba al Runner directo | `PATCH /api/v1/snippets/{id}` con `content`. Solo el dueño | [RUTAS_REST.md](RUTAS_REST.md) |
+| Leer el contenido | App, y si no venía, la UI se lo pedía al Runner | Solo App. Si no hay contenido, se abre vacío | [RUTAS_REST.md](RUTAS_REST.md) |
+| Abrir un snippet ajeno no compartido | Funcionaba | `403` | [SEGURIDAD.md](SEGURIDAD.md) |
 | Dueño de un snippet | Venía en el body (`userId`) | Sale del token (`sub`). El `userId` del body se ignora | [SEGURIDAD.md](SEGURIDAD.md) |
 | `GET /api/v1/snippets/{id}` | Sin control de permiso | Requiere token y ser dueño o compartido (si no, `403`) | [SEGURIDAD.md](SEGURIDAD.md) |
 | Rutas no declaradas de App | Sin regla explícita | `403` (`denyAll`). Solo se permiten `/api/**` con token, `/internal/**` y el health | [SEGURIDAD.md](SEGURIDAD.md) |
@@ -52,10 +61,9 @@ Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `In
 
 | Extra | Qué resuelve | Detalle |
 | :--- | :--- | :--- |
-| `update-infra` en cada servicio | Cada push a `develop` o `production` escribe la versión de la imagen en el stack de Infra (`develop` o `main`) | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
-| Redeploy forzado solo con commit humano en Infra | Un commit de una persona en Infra reinicia los 4 microservicios; los commits automáticos de los servicios, no | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
-| `concurrency` y reintentos | Si llegan varios pushes juntos, no se pisan: los intermedios quedan `cancelled` y el último aplica el stack completo | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
-| Verificación antes del `prune` | No se borran imágenes viejas hasta comprobar que los servicios nuevos levantaron | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
+| Redeploy forzado solo con commit humano en Infra | **Nuevo.** Un commit de una persona en Infra reinicia los 4 microservicios; los commits automáticos de los servicios, no | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
+| `concurrency` y reintentos en `update-infra` | **Mejorado.** `update-infra` ya existía (desde el 2/11) y escribe la versión de la imagen en el stack de Infra. Ahora, si llegan varios pushes juntos, no se pisan: los intermedios quedan `cancelled` y el último aplica el stack completo | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
+| Verificación antes del `prune` | **Recuperado.** Existía desde el 18/10 y se había perdido. No se borran imágenes viejas hasta comprobar que los servicios nuevos levantaron | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 | Contenedor `newrelic-infra` | Métricas de la VM y de los contenedores sin instalar nada en la VM | [NEW_RELIC.md](NEW_RELIC.md) |
 | `develop` y `main` de Infra iguales | Solo difieren en las 4 líneas `image:` | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 
@@ -68,8 +76,8 @@ Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `In
 | **Synthetics** | Monitores *ping* de la página y del health check, en dev y prod |
 | **Logs** | Logs de App, Runner y AccessManager en New Relic, con `requestId` (MDC) para seguir un request entre servicios. Logs de cambios de estado (alta, edición, borrado, compartir) |
 | **Dashboards** | Dashboards separados de dev y prod, con APM, infraestructura, contenedores y eventos de negocio |
-| **Alertas** | Políticas limpias, sin duplicados, y monitores nuevos para servicio caído y VM sin datos |
-| **SLI/SLO** | Definidos: 99 % de requests sin error en 28 días |
+| **Alertas** | Políticas limpias, sin duplicados, y alertas nuevas para servicio caído y VM sin datos. El 8/11: `Redis - trabajos sin procesar` (saturación), `Listas vacías en aumento` (dominio) y `Latencia p95 alta` (percentil) |
+| **SLI/SLO** | Service levels `AppIngsis - requests sin error` y `AppIngsis_dev - requests sin error`: 99 % en 28 días |
 
 Todo está explicado en [NEW_RELIC.md](NEW_RELIC.md).
 
@@ -102,7 +110,33 @@ Todo está explicado en [NEW_RELIC.md](NEW_RELIC.md).
 
 ## 8. Qué queda por hacer
 
-- Crear en New Relic las alertas de Redis, listas vacías y latencia p95, y el SLO (ver [NEW_RELIC.md](NEW_RELIC.md), secciones 9 y 14).
+- Deployar en el orden de la [sección 9](#9-orden-de-deploy) y probar en dev.
+- Las alertas de Redis y de listas vacías no tienen datos hasta que esté deployada la nueva versión de App.
 - Synthetic del flujo de negocio (crear, leer y borrar un snippet).
+- Alerta de *burn rate* del SLO.
 - Logs de nginx, asset-service, bases y Redis.
 - Contraseñas de las bases fuera del stack.
+
+## 9. Orden de deploy
+
+Los cambios dependen unos de otros, así que el orden importa:
+
+| Paso | Qué | Por qué en este orden |
+| :--- | :--- | :--- |
+| 1 | Infra, commit "license key de New Relic por variable de entorno" | Los servicios nuevos ya no traen la key en `newrelic.yml`. Sin esta variable, el agente no manda datos |
+| 2 | App y Runner, **juntos** | App nuevo no acepta el registro del Runner viejo, y el Runner nuevo llama a `/internal`, que solo existe en App nuevo. Entre uno y otro, crear un snippet puede fallar unos minutos |
+| 2 | AccessManager (puede ir con el paso 2) | Solo cambian logs y `newrelic.yml`. Necesita el paso 1 |
+| 3 | UI | Usa `PATCH` con `content`, que solo existe en App nuevo. Mientras tanto, la UI vieja sigue andando por `/runner/` |
+| 4 | Probar en dev | Ver la [prueba mínima](#prueba-mínima-en-dev) |
+| 5 | Infra, el resto de los commits (nginx y docs) | Cierra `/runner/` y `/access/`. Si se hace antes del paso 3, la UI vieja no puede crear con código ni editar |
+
+Cada push humano a Infra reinicia los 4 microservicios (pasos 1 y 5). En producción se repite igual: Infra `main`
+en vez de `develop`, y PR `develop` → `production` en los servicios.
+
+### Prueba mínima en dev
+1. Loguearse. Si todo da `401`, el token no trae `aud = https://api.snippets.com`.
+2. Crear un snippet con código, editarlo, compartirlo con otro usuario y abrirlo desde esa cuenta.
+3. Con un tercer usuario, abrir la URL del snippet: tiene que dar `403`.
+4. Borrarlo.
+5. Después del paso 5: `https://<dominio>/runner/api/v1/snippets/x` devuelve la página de la UI, no la API.
+6. En New Relic, a los pocos minutos: `SELECT count(*) FROM RedisStreamStatus, SnippetsListed FACET appName SINCE 30 minutes ago`.
