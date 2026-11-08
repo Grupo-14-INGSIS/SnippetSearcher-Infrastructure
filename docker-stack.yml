@@ -266,6 +266,14 @@ services:
       /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
       (while true; do sleep 21600; nginx -s reload; done) &
       exec nginx -g 'daemon off;'"
+    # `labels`: Docker agrega a cada línea de log el nombre del servicio, y así nginx-logs reconoce
+    # cuáles son de nginx. max-size/max-file: el log de acceso no llena el disco.
+    logging:
+      driver: json-file
+      options:
+        labels: com.docker.swarm.service.name
+        max-size: 10m
+        max-file: "3"
     deploy:
       replicas: 1
       restart_policy:
@@ -274,6 +282,32 @@ services:
         # el sitio queda en ERR_CONNECTION_REFUSED aunque el resto del stack este up.
         condition: any
         delay: 5s
+
+  # -------------------------------------------------------------
+  # Logs de nginx a New Relic (Fluent Bit). Lee los archivos de log que Docker ya guarda en la VM
+  # (solo lectura) y manda únicamente los del reverse-proxy. No instala nada en la VM.
+  # -------------------------------------------------------------
+  nginx-logs:
+    image: fluent/fluent-bit:3.1.9
+    environment:
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      DOMAIN_NAME: ${DOMAIN_NAME}
+    configs:
+      - source: fluentbit_conf
+        target: /fluent-bit/etc/fluent-bit.conf
+      - source: fluentbit_parsers
+        target: /fluent-bit/etc/parsers-nr.conf
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - fluentbit-state:/state
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
 
   # -------------------------------------------------------------
   # Certbot: renueva el certificado de Let's Encrypt (modo webroot)
@@ -304,6 +338,7 @@ volumes:
   accessmanager-pgdata:
   runner-pgdata:
   azurite-data:
+  fluentbit-state:
 
 # -------------------------------------------------------------
 # Configs de Swarm: archivos del repo que antes se copiaban a la VM con scp y se montaban
@@ -318,6 +353,12 @@ configs:
   nginx_50x_page:
     name: nginx_50x_${NGINX_50X_HASH:-local}
     file: ./reverse-proxy/nginx/errors/50x.html
+  fluentbit_conf:
+    name: fluentbit_conf_${FLUENTBIT_CONF_HASH:-local}
+    file: ./reverse-proxy/fluent-bit/fluent-bit.conf
+  fluentbit_parsers:
+    name: fluentbit_parsers_${FLUENTBIT_PARSERS_HASH:-local}
+    file: ./reverse-proxy/fluent-bit/parsers.conf
   app_init_sql:
     name: app_init_${APP_INIT_HASH:-local}
     file: ./db/app-init/01-init-snippet.sql

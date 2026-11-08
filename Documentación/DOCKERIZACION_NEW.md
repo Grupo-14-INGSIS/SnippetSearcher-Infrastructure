@@ -20,6 +20,7 @@ Este documento detalla la estrategia de contenedorización y orquestación del s
 | **azurite** | Object Storage Emulator | `mcr.microsoft.com/azure-storage/azurite` | Emulador de Azure Blob Storage |
 | **reverse-proxy** | Edge Proxy / Gateway | `nginx:stable-alpine` + template dinámico | Punto único de entrada HTTP/HTTPS y ruteo |
 | **certbot** | Gestor SSL (Swarm) | `certbot/certbot:v2.11.0` | Renovación periódica en modo webroot |
+| **nginx-logs** | Observabilidad (Swarm) | `fluent/fluent-bit:3.1.9` + `reverse-proxy/fluent-bit/*.conf` | Manda los logs de nginx a New Relic (ver `NEW_RELIC.md`, sección 6) |
 
 ---
 

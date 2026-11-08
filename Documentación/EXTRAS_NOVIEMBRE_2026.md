@@ -65,6 +65,7 @@ Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `In
 | `concurrency` y reintentos en `update-infra` | **Mejorado.** `update-infra` ya existía (desde el 2/11) y escribe la versión de la imagen en el stack de Infra. Ahora, si llegan varios pushes juntos, no se pisan: los intermedios quedan `cancelled` y el último aplica el stack completo | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 | Verificación antes del `prune` | **Recuperado.** Existía desde el 18/10 y se había perdido. No se borran imágenes viejas hasta comprobar que los servicios nuevos levantaron | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 | Contenedor `newrelic-infra` | Métricas de la VM y de los contenedores sin instalar nada en la VM | [NEW_RELIC.md](NEW_RELIC.md) |
+| Servicio `nginx-logs` en el stack | Logs de nginx en New Relic, sin instalar nada en la VM. nginx loguea en JSON, le pasa el `X-Request-Id` a App y su log rota a los 10 MB | [NEW_RELIC.md](NEW_RELIC.md), sección 6 |
 | `develop` y `main` de Infra iguales | Solo difieren en las 4 líneas `image:` | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 
 ## 4. Observabilidad (New Relic)
@@ -74,7 +75,7 @@ Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `In
 | **Trazas** | Agente Java en App, Runner y AccessManager, con trazas distribuidas entre ellos |
 | **Métricas** | Eventos propios `SnippetsListed` (cuántos snippets ve cada usuario) y `RedisStreamStatus` (trabajos encolados y pendientes, cada 60 s). Métricas de VM y contenedores por `newrelic-infra` |
 | **Synthetics** | Monitores *ping* de la página y del health check, en dev y prod |
-| **Logs** | Logs de App, Runner y AccessManager en New Relic, con `requestId` (MDC) para seguir un request entre servicios. Logs de cambios de estado (alta, edición, borrado, compartir) |
+| **Logs** | Logs de App, Runner y AccessManager en New Relic, con `requestId` (MDC) para seguir un request entre servicios. Logs de cambios de estado (alta, edición, borrado, compartir). **Logs de nginx** con el servicio `nginx-logs` (Fluent Bit): muestran los `413`, `502` y `504` que no llegan a App, y llevan el mismo `request_id` |
 | **Dashboards** | Dashboards separados de dev y prod, con APM, infraestructura, contenedores y eventos de negocio |
 | **Alertas** | Políticas limpias, sin duplicados, y alertas nuevas para servicio caído y VM sin datos. El 8/11: `Redis - trabajos sin procesar` (saturación), `Listas vacías en aumento` (dominio) y `Latencia p95 alta` (percentil) |
 | **SLI/SLO** | Service levels `AppIngsis - requests sin error` y `AppIngsis_dev - requests sin error`: 99 % en 28 días |
@@ -104,6 +105,7 @@ Todo está explicado en [NEW_RELIC.md](NEW_RELIC.md).
 | **No rotar** el `clientSecret` de Auth0 ni la license key de New Relic | Es un TP con cuentas de prueba. Siguen en el historial de Git: riesgo aceptado |
 | No prender ni apagar la VM automáticamente desde las Actions | Más contras que ventajas: credenciales de la nube en GitHub, demoras y riesgo de dejarla prendida |
 | `Excessive response time` en 0,3 s | Para que se dispare rápido en la demo. Después conviene subirlo a unos 2 s |
+| Logs solo de nginx, no de bases, Redis, UI ni asset-service | nginx es lo único cuyas fallas no se ven en los logs de App y Runner. Sumar el resto es agregar su nombre en `fluent-bit.conf` |
 | Sin scopes en el token | Lo que importa es el permiso por snippet, que un scope no expresa |
 | Token en `localStorage` | Con `memory`, la sesión se pierde al recargar en navegadores que bloquean cookies de terceros |
 | No separar los workflows de CI y CD | Dividirlos sumaba más complejidad que beneficio |
@@ -114,7 +116,7 @@ Todo está explicado en [NEW_RELIC.md](NEW_RELIC.md).
 - Las alertas de Redis y de listas vacías no tienen datos hasta que esté deployada la nueva versión de App.
 - Synthetic del flujo de negocio (crear, leer y borrar un snippet).
 - Alerta de *burn rate* del SLO.
-- Logs de nginx, asset-service, bases y Redis.
+- Comprobar en dev que llegan los logs de nginx (paso 7 de la prueba mínima).
 - Contraseñas de las bases fuera del stack.
 
 ## 9. Orden de deploy
@@ -128,7 +130,7 @@ Los cambios dependen unos de otros, así que el orden importa:
 | 2 | AccessManager (puede ir con el paso 2) | Solo cambian logs y `newrelic.yml`. Necesita el paso 1 |
 | 3 | UI | Usa `PATCH` con `content`, que solo existe en App nuevo. Mientras tanto, la UI vieja sigue andando por `/runner/` |
 | 4 | Probar en dev | Ver la [prueba mínima](#prueba-mínima-en-dev) |
-| 5 | Infra, el resto de los commits (nginx y docs) | Cierra `/runner/` y `/access/`. Si se hace antes del paso 3, la UI vieja no puede crear con código ni editar |
+| 5 | Infra, el resto de los commits (nginx, logs de nginx y docs) | Cierra `/runner/` y `/access/` y suma `nginx-logs`. Si se hace antes del paso 3, la UI vieja no puede crear con código ni editar |
 
 Cada push humano a Infra reinicia los 4 microservicios (pasos 1 y 5). En producción se repite igual: Infra `main`
 en vez de `develop`, y PR `develop` → `production` en los servicios.
@@ -140,3 +142,7 @@ en vez de `develop`, y PR `develop` → `production` en los servicios.
 4. Borrarlo.
 5. Después del paso 5: `https://<dominio>/runner/api/v1/snippets/x` devuelve la página de la UI, no la API.
 6. En New Relic, a los pocos minutos: `SELECT count(*) FROM RedisStreamStatus, SnippetsListed FACET appName SINCE 30 minutes ago`.
+7. Logs de nginx: `docker service ps snippetsearcher_nginx-logs` tiene que estar `Running`, y en New Relic
+   `SELECT count(*) FROM Log WHERE service = 'nginx' FACET status, domain SINCE 30 minutes ago` tiene que traer filas.
+   Si no trae nada, `docker service logs snippetsearcher_nginx-logs` muestra por qué (por ejemplo, un `403` de la
+   Log API si la license key es de otra región).

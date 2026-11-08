@@ -33,6 +33,7 @@ Cuenta: `7325136`. Todo lo de este documento se consulta en **one.newrelic.com**
                           │                                                 │
                           │  agente Java (APM) dentro de App, Runner y AM  ─┼──► trazas, métricas APM, logs
                           │  contenedor newrelic-infra                     ─┼──► métricas de VM y contenedores
+                          │  servicio nginx-logs (Fluent Bit)              ─┼──► logs de nginx
                           └─────────────────────────────────────────────────┘
  Synthetics (desde afuera) ──► página y /api/actuator/health ───────────────────► chequeos
                                                                                    │
@@ -45,6 +46,7 @@ Cuenta: `7325136`. Todo lo de este documento se consulta en **one.newrelic.com**
 | :--- | :--- | :--- |
 | Agente Java (App, Runner, AccessManager) | Requests, tiempos, errores, trazas y logs | `Transaction`, `TransactionError`, `Span`, `Log`, `Metric` |
 | Contenedor `newrelic-infra` | CPU, memoria y disco de la VM, y estado de cada contenedor | `SystemSample`, `ContainerSample` |
+| Servicio `nginx-logs` (Fluent Bit) | Una línea por request que pasa por nginx, y sus errores | `Log` con `service = 'nginx'` |
 | Synthetics | Resultado de cada chequeo desde afuera | `SyntheticCheck` |
 | Alertas | Apertura y cierre de incidentes | `NrAiIncident` |
 
@@ -217,7 +219,8 @@ Los de health validan que la respuesta contenga `"status":"UP"`.
 **Dónde:** **Logs**. Se filtra por `entity.name` (nombre de la app), `level` y los atributos del contexto.
 
 Llegan los logs de **App, Runner y AccessManager**, en los dos ambientes, enviados por el agente Java
-(`application_logging.forwarding`). No llegan los de nginx, UI, bases, Redis ni `asset-service`.
+(`application_logging.forwarding`), y los de **nginx**, enviados por Fluent Bit (ver más abajo). No llegan los de
+UI, bases, Redis ni `asset-service`: sus errores ya aparecen en los logs de App y Runner.
 
 **Contexto aparte del mensaje (MDC):** el `requestId` se carga una vez al entrar el request y viaja como atributo de
 cada log (`forwarding.context_data`). El agente le agrega `trace.id` y `span.id`. Así se filtra por campo, sin
@@ -243,6 +246,37 @@ Nunca se loguean tokens ni contraseñas: solo el id del usuario (`sub` de Auth0)
 | Todo lo de un request | `SELECT timestamp, entity.name, message FROM Log WHERE context.requestId = 'ID' SINCE 1 day ago` |
 
 Los logs **no** tienen el atributo `appName`: hay que usar `entity.name`.
+
+### Logs de nginx
+Muestran lo que **no llega a App** y por eso no deja traza: un `413` (archivo demasiado grande), un `502`/`504`
+(servicio caído o lento), un `401` o un pedido a una ruta que no existe.
+
+**Cómo llegan, sin instalar nada en la VM:**
+```
+nginx ─ stdout (JSON) ─► Docker guarda el archivo de log en la VM ─► nginx-logs (Fluent Bit) ─► Log API de New Relic
+```
+
+| Archivo | Qué hace |
+| :--- | :--- |
+| `reverse-proxy/nginx/conf.d/app.conf` | `log_format nr_json`: una línea JSON por request, con `status`, `request_time`, `upstream_status`, `request_id`, etc. Usa `$uri`, sin query string. También manda a App el `X-Request-Id` (el que vino, o uno que genera nginx) |
+| `docker-stack.yml`, servicio `reverse-proxy` | `logging.options.labels`: Docker marca cada línea con el nombre del servicio. `max-size`/`max-file`: el log no llena el disco |
+| `docker-stack.yml`, servicio `nginx-logs` | Fluent Bit 3.1.9. Lee `/var/lib/docker/containers` en solo lectura, con un límite de 64 MB de memoria |
+| `reverse-proxy/fluent-bit/fluent-bit.conf` | Se queda solo con las líneas del `reverse-proxy`, separa el JSON en atributos, agrega `service = nginx` y `domain`, y las manda con el secret `NEW_RELIC_LICENSE_KEY` |
+| `reverse-proxy/fluent-bit/parsers.conf` | Cómo leer el formato de Docker y el JSON de nginx |
+
+**Cómo se separan los ambientes:** por el atributo `domain` (`snippet26dev.duckdns.org` o `snippet26prod.duckdns.org`).
+
+| Qué ver | NRQL |
+| :--- | :--- |
+| Requests por código de respuesta | `SELECT count(*) FROM Log WHERE service = 'nginx' FACET status, domain SINCE 1 hour ago` |
+| Rechazados antes de llegar a App (`413`, `502`, `504`) | `SELECT timestamp, domain, method, uri, status, request_length FROM Log WHERE service = 'nginx' AND status IN (413, 502, 504) SINCE 1 day ago` |
+| Lo más lento, medido desde nginx | `SELECT percentile(request_time, 95) FROM Log WHERE service = 'nginx' FACET uri SINCE 1 hour ago` |
+| Errores del propio nginx | `SELECT timestamp, message FROM Log WHERE service = 'nginx' AND stream = 'stderr' SINCE 1 day ago` |
+| Un request, desde nginx hasta el último servicio | `SELECT timestamp, service, entity.name, message FROM Log WHERE request_id = 'ID' OR context.requestId = 'ID' SINCE 1 day ago` |
+
+**Ejemplo del snippet enorme:** nginx acepta como máximo 1 MB por request (`client_max_body_size` por defecto). Al
+subir un archivo más grande, nginx responde `413` y App nunca se entera. Ahora queda una línea con `status = 413` y el
+tamaño en `request_length`.
 
 ---
 
@@ -392,9 +426,10 @@ porque el promedio esconde a los pocos usuarios que esperan mucho. Si suenan jun
 | Una réplica de un servicio caída | `Servicio con réplica caída` | `ContainerSample` |
 | Lentitud | `Excessive response time`, `High Application Response Time` | Trazas: qué paso tarda |
 | Errores en la aplicación | `Error overflow`, `High Application Error percentage` | **Triage Inbox**, `TransactionError`, logs |
-| Redis Streams saturados (consumidor caído o lento) | `Redis - trabajos sin procesar` (a crear) | `RedisStreamStatus` |
-| La API responde `200`, pero un usuario ve 0 snippets | `Listas vacías en aumento` (a crear) | `SnippetsListed` y logs `snippets listed` |
-| Request rechazado por nginx (por ejemplo, un snippet demasiado grande: `413`) | **Ninguna** | No llega a New Relic (ver sección 13) |
+| Redis Streams saturados (consumidor caído o lento) | `Redis - trabajos sin procesar` | `RedisStreamStatus` |
+| La API responde `200`, pero un usuario ve 0 snippets | `Listas vacías en aumento` | `SnippetsListed` y logs `snippets listed` |
+| Request rechazado por nginx (por ejemplo, un snippet de más de 1 MB: `413`) | Ninguna: queda en los logs | Logs de nginx: `status = 413` ([sección 6](#6-logs)) |
+| nginx no llega a un servicio (`502`, `504`) | `backend caído`, si dura | Logs de nginx: `status IN (502, 504)` y `upstream_status` |
 
 ---
 
@@ -420,8 +455,11 @@ Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y thr
 
 ## 13. Limitaciones y pendientes
 
-- **Logs de nginx, UI, bases, Redis y `asset-service`:** no llegan. El contenedor `newrelic-infra` no reenvía logs;
-  haría falta un recolector como Fluent Bit. Sin los de nginx no se ven los `413` ni los `502`.
+- **Logs de UI, bases, Redis y `asset-service`:** no llegan, a propósito: sus fallas ya aparecen en los logs de App y
+  Runner. Para sumarlos, alcanza con agregar a `fluent-bit.conf` el nombre de su servicio y ponerles la misma opción
+  `logging` que tiene el `reverse-proxy`.
+- **Logs de nginx:** falta comprobarlos en dev después del primer deploy (ver
+  [EXTRAS_NOVIEMBRE_2026.md](EXTRAS_NOVIEMBRE_2026.md), prueba mínima). No hay alerta sobre ellos.
 - **Synthetic del flujo de negocio:** la clase sugiere uno que cree, lea y borre un snippet. Necesita un token:
   una aplicación *Machine to Machine* en Auth0 con acceso a `https://api.snippets.com`, sus credenciales como
   *Secure credentials* de New Relic, y un monitor *Scripted API* que pida el token y haga las tres llamadas. No está
@@ -476,7 +514,7 @@ de lo normal. New Relic la ofrece al crear el service level.
 | Contexto aparte del mensaje (MDC) y `requestId` entre servicios | ✅ | `RequestIdFilter`, `logback-spring.xml` y `context_data` |
 | Loguear cambios de estado, quién los hizo y resultados | ✅ | Logs de alta, edición, borrado, compartir y `snippets listed` |
 | Nunca loguear secretos | ✅ | Solo el `sub` del usuario |
-| Logs de todos los componentes | ⚠️ | Faltan nginx, asset-service, bases y Redis |
+| Logs de todos los componentes | ✅ | App, Runner, AccessManager y nginx. El resto se ve a través de ellos (sección 13) |
 | Métricas clásicas: tráfico, duración, CPU, memoria, uptime | ✅ | APM, agente de infraestructura y Synthetics |
 | Cuatro señales: latencia, tráfico, errores | ✅ | APM y dashboards |
 | Cuatro señales: saturación | ✅ | `RedisStreamStatus` y la alerta `Redis - trabajos sin procesar` |
