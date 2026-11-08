@@ -100,7 +100,7 @@ El repositorio de infraestructura mantiene dos modelos de acceso claros y difere
                  | Nginx Reverse Proxy (80/443)|
                  +---------------------------+
                    /          |             \
-     (location /) / (location /api/)         \ (location /runner/)
+     (location /) / (location /api/)         \ (red interna, solo App)
                  v            v               v
                +----+      +-----+         +------+
                | UI |      | App |         |Runner|

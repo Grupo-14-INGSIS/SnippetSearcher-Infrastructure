@@ -17,6 +17,7 @@ Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`
 * **[Calidad, Linter, Formateador y CI/CD](Documentación/CALIDAD_LINTER_FORMATTER_CI.md)**: Estándares de código heredados de PrintScript, plugins `myPlugin`, Ktlint, Detekt, JaCoCo y Git hooks.
 * **[Estrategia de Tags Docker](Documentación/ESTRATEGIA_TAGS_DOCKER.md)**: Estrategia de doble etiquetado (`:rama` y `:<rama>-<commit>`), trazabilidad, rollbacks y compatibilidad con Swarm.
 * **[Checklist de Producción](PRODUCCION.md)**: Guía paso a paso para la puesta a punto y mantenimiento de la VM de Producción.
+* **[Seguridad](Documentación/SEGURIDAD.md)**: Autenticación con Auth0, autorización por dueño y compartido, qué está expuesto a internet y dónde viven los secretos.
 * **[New Relic](Documentación/NEW_RELIC.md)**: Qué se monitorea (trazas, métricas, Synthetics, logs, dashboards y alertas), dónde verlo, consultas NRQL, cómo seguir un request por su id y cómo mostrar cada alerta.
 * **[Tests de carga con Locust](Documentación/LOCUST.md)**: Qué hace, cómo correrlo, qué mirar y qué alertas puede activar.
 

@@ -17,6 +17,8 @@ Cuenta: `7325136`. Todo lo de este documento se consulta en **one.newrelic.com**
 - [11. Puntos de falla y cómo se detectan](#11-puntos-de-falla-y-cómo-se-detectan)
 - [12. Tests de carga](#12-tests-de-carga)
 - [13. Limitaciones y pendientes](#13-limitaciones-y-pendientes)
+- [14. SLI, SLO y error budget](#14-sli-slo-y-error-budget)
+- [15. Qué plantea la clase y cómo se cumple](#15-qué-plantea-la-clase-y-cómo-se-cumple)
 
 ---
 
@@ -68,12 +70,15 @@ En **App, Runner y AccessManager**:
 | Archivo | Qué hace |
 | :--- | :--- |
 | `Dockerfile` | Descarga `newrelic-agent-8.25.1.jar` y arranca la app con `java -javaagent:/usr/local/newrelic/newrelic.jar -jar ...` |
-| `newrelic/newrelic.yml` | Configuración del agente: `distributed_tracing`, `span_events`, `transaction_tracer`, `error_collector` y `application_logging.forwarding` activados |
+| `newrelic/newrelic.yml` | Configuración del agente: `distributed_tracing`, `span_events`, `transaction_tracer`, `error_collector` y `application_logging.forwarding` activados. `forwarding.context_data` manda el MDC (`requestId`) como atributo de cada log. **No tiene la license key** |
 | `build.gradle` | `com.newrelic.agent.java:newrelic-api`, para usar `NewRelic.addCustomParameter` desde el código |
 | `filter/RequestIdFilter.kt` | Toma el header `X-Request-Id` (o genera uno), lo guarda como atributo `request_id` de la transacción y lo devuelve en la respuesta (ver [sección 8](#8-seguir-un-request-por-su-id)) |
 
 El nombre de cada app no sale de `newrelic.yml` sino de la variable `NEW_RELIC_APP_NAME`, que `docker-stack.yml` arma
 con las variables del environment de GitHub. Detalle en [TROUBLESHOOTING2_NEW.md](../TROUBLESHOOTING2_NEW.md).
+
+La license key tampoco está en el repo: el agente la toma de la variable `NEW_RELIC_LICENSE_KEY`, que
+`docker-stack.yml` carga desde el secret del mismo nombre (lo pasa `deploy.yml`).
 
 ### Agente de infraestructura (VM y contenedores)
 En `SnippetSearcher-Infrastructure/.github/workflows/deploy.yml`, paso **Ensure New Relic infrastructure agent**:
@@ -94,6 +99,17 @@ En **App**:
 AccessManager tiene `spring-boot-starter-actuator` para que App pueda consultarlo. Runner ya lo tenía.
 La respuesta es `{"status":"UP"}` (200) o `{"status":"DOWN"}` (503). Incluye la base de App, Redis, Runner y
 AccessManager.
+
+### Logs y eventos de negocio
+En **App**:
+
+| Archivo | Qué hace |
+| :--- | :--- |
+| `controller/SnippetController.kt` | Loguea cada cambio de estado con quién lo hizo: `snippet created`, `snippet deleted`, `snippet shared`, `snippet unshared`, `snippet content updated`, y `snippets listed` con la cantidad |
+| `observability/BusinessEvents.kt` | Manda a New Relic los eventos `SnippetsListed` (cuántos snippets vio cada usuario) y `RedisStreamStatus` |
+| `observability/StreamSaturationReporter.kt` | Cada minuto mide el largo de los streams de Redis y los mensajes sin confirmar de cada grupo (saturación) |
+
+En los tres servicios, `logback-spring.xml` imprime el `requestId` del MDC en cada línea.
 
 ---
 
@@ -150,6 +166,31 @@ Valores esperados de réplicas: **2** en App, Runner, AccessManager y UI; **1** 
 
 ---
 
+### Saturación: Redis Streams
+La cuarta señal dorada. `RedisStreamStatus` llega cada minuto desde App:
+
+| Stream | Grupo | `length` | `pending` |
+| :--- | :--- | :--- | :--- |
+| `snippet-jobs` | `runner_group` | Trabajos de formateo y linteo encolados | Trabajos que el Runner tomó y no terminó |
+| `snippet-job-results` | `app_group` | Resultados encolados | Resultados que App no procesó |
+
+| Qué ver | NRQL |
+| :--- | :--- |
+| Estado actual | `SELECT latest(length), latest(pending) FROM RedisStreamStatus FACET stream, entity.name SINCE 5 minutes ago` |
+| Evolución del lag | `SELECT max(pending) FROM RedisStreamStatus FACET stream TIMESERIES AUTO` |
+
+`pending` alto y creciendo significa que los consumidores no dan abasto o que una réplica murió con mensajes tomados.
+`length` está acotado a unos 10000 mensajes (`MAXLEN`), así que es más útil mirar `pending`.
+
+### Métrica de negocio: snippets listados
+`SnippetsListed` registra cuántos snippets vio un usuario cada vez que pidió su lista. Sirve para el caso que
+ninguna métrica técnica ve: la API responde `200`, pero con la lista vacía.
+
+| Qué ver | NRQL |
+| :--- | :--- |
+| Usuarios que hoy ven 0 snippets pero ayer veían alguno | `SELECT latest(count) AS hoy, earliest(count) AS antes FROM SnippetsListed FACET userId SINCE 1 day ago LIMIT 50` |
+| Proporción de listas vacías | `SELECT percentage(count(*), WHERE count = 0) FROM SnippetsListed TIMESERIES AUTO` |
+
 ## 5. Synthetics
 
 **Dónde:** **Synthetic Monitoring → Monitors**. Los cuatro son de tipo Ping, cada 5 minutos, desde 2 ubicaciones.
@@ -173,16 +214,33 @@ Los de health validan que la respuesta contenga `"status":"UP"`.
 
 ## 6. Logs
 
-**Dónde:** **Logs**. Se filtra por `entity.name` (nombre de la app) y `level`.
+**Dónde:** **Logs**. Se filtra por `entity.name` (nombre de la app), `level` y los atributos del contexto.
 
 Llegan los logs de **App, Runner y AccessManager**, en los dos ambientes, enviados por el agente Java
 (`application_logging.forwarding`). No llegan los de nginx, UI, bases, Redis ni `asset-service`.
+
+**Contexto aparte del mensaje (MDC):** el `requestId` se carga una vez al entrar el request y viaja como atributo de
+cada log (`forwarding.context_data`). El agente le agrega `trace.id` y `span.id`. Así se filtra por campo, sin
+buscar texto. El atributo debería llamarse `context.requestId`: confirmalo en el primer log, desplegándolo en **Logs**.
+
+**Qué se loguea** (App): cada cambio de estado con quién lo hizo, en formato `clave=valor`:
+
+| Evento | Ejemplo |
+| :--- | :--- |
+| Alta | `snippet created snippetId=... owner=auth0|... language=printscript` |
+| Edición del código | `snippet content updated snippetId=... by=auth0|...` |
+| Borrado | `snippet deleted snippetId=... by=auth0|...` |
+| Compartir y quitar acceso | `snippet shared snippetId=... by=... with=...`, `snippet unshared ... from=...` |
+| Resultado de listar | `snippets listed user=... count=0 owned=0 shared=0` |
+
+Nunca se loguean tokens ni contraseñas: solo el id del usuario (`sub` de Auth0).
 
 | Qué ver | NRQL |
 | :--- | :--- |
 | Volumen por servicio y nivel | `SELECT count(*) FROM Log FACET entity.name, level SINCE 1 day ago` |
 | Errores recientes | `SELECT timestamp, entity.name, message FROM Log WHERE level = 'ERROR' SINCE 1 day ago` |
-| Buscar un texto | `SELECT timestamp, entity.name, message FROM Log WHERE message LIKE '%texto%' SINCE 1 day ago` |
+| Cambios de estado de hoy | `SELECT timestamp, message FROM Log WHERE message LIKE 'snippet %' SINCE 1 day ago` |
+| Todo lo de un request | `SELECT timestamp, entity.name, message FROM Log WHERE context.requestId = 'ID' SINCE 1 day ago` |
 
 Los logs **no** tienen el atributo `appName`: hay que usar `entity.name`.
 
@@ -236,9 +294,9 @@ La búsqueda de logs por `message` encuentra la línea `Request <id> ...` de cad
 los logs escritos durante ese request: el agente le agrega `trace.id` a los logs que se escriben dentro de una
 transacción.
 
-**Detalle a corregir:** el filtro guarda el id en el MDC como `requestId`, pero el patrón de logs de `application.yml`
-usa `%X{request_id}`. Por eso ese campo del patrón sale vacío en la consola. No afecta a New Relic, que busca por el
-atributo `request_id` o por el mensaje.
+**Corregido:** Runner y AccessManager usaban otra clave del MDC en `logback-spring.xml` (`request_id` en lugar de
+`requestId`), y en sus logs ese campo salía vacío. Ahora los tres servicios usan `requestId`. Además, el MDC viaja
+como atributo de los logs (ver [sección 6](#6-logs)).
 
 ---
 
@@ -280,6 +338,17 @@ Para mostrar una alerta: provocar la falla **en dev**, esperar el tiempo de la c
 
 El disparador de `Error overflow` no está probado: depende de que la falta de Redis genere logs `ERROR`.
 
+### Alertas recomendadas para crear
+Cubren lo que la clase marca como faltante. Se crean en **Alerts → Alert Conditions → Add a condition → NRQL**:
+
+| Nombre sugerido | NRQL | Critical | Policy |
+| :--- | :--- | :--- | :--- |
+| `Redis - trabajos sin procesar` | `SELECT max(pending) FROM RedisStreamStatus FACET stream` | `above 50` durante 10 min | `Infraestructura` |
+| `Listas vacías en aumento` | `SELECT percentage(count(*), WHERE count = 0) FROM SnippetsListed` | `above 50` durante 15 min | `Error Rate` |
+| `Latencia p95 alta` (reemplaza a `Excessive response time`, que usa promedio) | `SELECT percentile(duration, 95) FROM Transaction WHERE appName IN ('AppIngsis', 'AppIngsis_dev') FACET appName` | `above 0.3` durante 5 min (demo) o `above 2` | `Error Rate` |
+
+Para la latencia, la clase recomienda percentiles: el promedio esconde a los pocos usuarios que esperan mucho.
+
 ### Ver las alertas disparadas
 `SELECT count(*) FROM NrAiIncident WHERE event = 'open' FACET conditionName, entity.name SINCE 1 day ago`
 
@@ -316,6 +385,8 @@ El disparador de `Error overflow` no está probado: depende de que la falta de R
 | Una réplica de un servicio caída | `Servicio con réplica caída` | `ContainerSample` |
 | Lentitud | `Excessive response time`, `High Application Response Time` | Trazas: qué paso tarda |
 | Errores en la aplicación | `Error overflow`, `High Application Error percentage` | **Triage Inbox**, `TransactionError`, logs |
+| Redis Streams saturados (consumidor caído o lento) | `Redis - trabajos sin procesar` (a crear) | `RedisStreamStatus` |
+| La API responde `200`, pero un usuario ve 0 snippets | `Listas vacías en aumento` (a crear) | `SnippetsListed` y logs `snippets listed` |
 | Request rechazado por nginx (por ejemplo, un snippet demasiado grande: `413`) | **Ninguna** | No llega a New Relic (ver sección 13) |
 
 ---
@@ -344,9 +415,65 @@ Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y thr
 
 - **Logs de nginx, UI, bases, Redis y `asset-service`:** no llegan. El contenedor `newrelic-infra` no reenvía logs;
   haría falta un recolector como Fluent Bit. Sin los de nginx no se ven los `413` ni los `502`.
+- **Synthetic del flujo de negocio:** la clase sugiere uno que cree, lea y borre un snippet. Necesita un token:
+  una aplicación *Machine to Machine* en Auth0 con acceso a `https://api.snippets.com`, sus credenciales como
+  *Secure credentials* de New Relic, y un monitor *Scripted API* que pida el token y haga las tres llamadas. No está
+  hecho. Hoy lo más cercano es el monitor `health`, que prueba App, su base, Redis, Runner y AccessManager.
+- **Alertas recomendadas:** las de la [sección 9](#9-alertas-qué-hace-cada-una-y-cómo-mostrarla) (saturación, listas
+  vacías, latencia por percentil) hay que crearlas en New Relic.
+- **SLO:** hay que crearlo en New Relic (ver [sección 14](#14-sli-slo-y-error-budget)).
 - **Baja de tráfico sin caída:** no se detecta.
 - **Muting rules:** no hay. Cuando se apaga una VM, se disparan varias alertas a la vez.
 - **`Excessive response time` en 0,3 s:** a propósito para la demo; después conviene subirlo a unos 2 s.
-- **`license_key` en el repo:** está escrita en `newrelic/newrelic.yml` de cada servicio. Conviene rotarla y pasarla a
-  un secret.
+- **License key:** ya no está en el código, pero quedó en el historial de Git. Hay que rotarla (ver [SEGURIDAD.md](SEGURIDAD.md)).
 - **`VM - Sin datos`:** falta comprobar que dispara con *Lost signal* (ver sección 9).
+
+---
+
+## 14. SLI, SLO y error budget
+
+| Término | Para el Snippet Searcher |
+| :--- | :--- |
+| **SLI** (qué se mide) | Porcentaje de requests a App que responden sin error |
+| **SLO** (objetivo) | 99 % en los últimos 28 días |
+| **Error budget** (cuánto se puede fallar) | 1 % de los requests. En tiempo, equivale a unas 6 h 43 min en 28 días |
+
+Se mide **por requests** y no por tiempo: un minuto con la VM apagada y sin usuarios no consume presupuesto, pero
+un error mientras alguien usa la app sí.
+
+**Cómo crearlo en New Relic** (uno por ambiente):
+
+1. Andá a **APM & Services**, abrí `AppIngsis` y entrá a **Service levels → Add a service level**.
+2. Elegí **Success** (requests sin error). Si pide las consultas a mano:
+   - Valid events: `FROM Transaction WHERE appName = 'AppIngsis'`
+   - Good events: `FROM Transaction WHERE appName = 'AppIngsis' AND error IS false`
+3. Objetivo: `99` %, período: `28 days`.
+4. Repetí con `AppIngsis_dev`.
+
+Para un SLI de latencia, en el paso 2 elegí **Latency** con un umbral (por ejemplo, 1 s): cuenta como bueno el request
+que respondió bien y a tiempo.
+
+**Para qué sirve:** si queda presupuesto, se puede deployar y experimentar. Si se gastó, se frenan los cambios y se
+prioriza la estabilidad. Una alerta útil es la de *burn rate*: avisa cuando el presupuesto se está gastando más rápido
+de lo normal. New Relic la ofrece al crear el service level.
+
+---
+
+## 15. Qué plantea la clase y cómo se cumple
+
+| Concepto | Estado | Cómo |
+| :--- | :--- | :--- |
+| Logs centralizados | ✅ | New Relic, para App, Runner y AccessManager |
+| Contexto aparte del mensaje (MDC) y `requestId` entre servicios | ✅ | `RequestIdFilter`, `logback-spring.xml` y `context_data` |
+| Loguear cambios de estado, quién los hizo y resultados | ✅ | Logs de alta, edición, borrado, compartir y `snippets listed` |
+| Nunca loguear secretos | ✅ | Solo el `sub` del usuario |
+| Logs de todos los componentes | ⚠️ | Faltan nginx, asset-service, bases y Redis |
+| Métricas clásicas: tráfico, duración, CPU, memoria, uptime | ✅ | APM, agente de infraestructura y Synthetics |
+| Cuatro señales: latencia, tráfico, errores | ✅ | APM y dashboards |
+| Cuatro señales: saturación | ✅ | `RedisStreamStatus`. Falta crear su alerta |
+| Percentiles para la latencia | ⚠️ | Dashboards con p50/p95/p99. La alerta de latencia usa promedio: hay que crear la de p95 |
+| Trazas distribuidas | ✅ | Agente Java en los tres servicios |
+| Synthetics | ⚠️ | Página y health del backend. Falta el del flujo de negocio |
+| Métrica de dominio («mis snippets desaparecieron») | ✅ | `SnippetsListed`. Falta crear su alerta |
+| SLI, SLO y error budget | ⚠️ | Definidos en la sección 14. Hay que crearlos en New Relic |
+| Alertas accionables, sin ruido | ⚠️ | La de 0,3 s y las de VM apagada suenan seguido |

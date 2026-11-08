@@ -117,8 +117,6 @@ client --> nginx : 2. HTTPS (Entrada única)
 
 nginx --> ui : / (Archivos estáticos)
 nginx --> app : /api/* (API Backend)
-nginx --> runner : /runner/* (Ejecución / Código)
-nginx --> access : /access/* (Permisos)
 nginx ..> certbot : Desafío ACME (/.well-known/acme-challenge/ en :80)
 
 app --> access : Consulta permisos (Tiempo real)
@@ -229,8 +227,7 @@ deactivate app
 3. **Enrutamiento por Prefijo de Ruta (Path-Based Routing)**:
    - `/` $\rightarrow$ Sirve la SPA de React (`printscript-ui`).
    - `/api/*` $\rightarrow$ Redirige internamente a `App` (`http://snippetsearcher-app:8080`).
-   - `/runner/*` $\rightarrow$ Redirige internamente a `Runner` (`http://snippetsearcher-runner:8080`).
-   - `/access/*` $\rightarrow$ Redirige internamente a `AccessManager` (`http://snippetsearcher-accessmanager:8080`).
+   - Runner y AccessManager no tienen ruta pública: solo App los llama, por la red interna.
 4. **Trazabilidad (`X-Request-Id`)**:
    - Inyección y preservación del encabezado de correlación de punta a punta en los logs y New Relic.
 
@@ -241,7 +238,7 @@ deactivate app
 | Componente / Dimensión | Arquitectura Vieja | Arquitectura Nueva (Actual) | Justificación Técnica |
 | :--- | :--- | :--- | :--- |
 | **Punto de Entrada Exterior** | Sin proxy. Browser expuesto a puertos `:19081` y `:19082`. | **Nginx (Reverse Proxy)** en puertos `:80` / `:443`. | **Seguridad & DMZ**: Oculta puertos internos, enruta tráfico y maneja SSL. |
-| **Punto de Entrada API** | Fragmentado: llamadas directas a `App` y a `Runner` en internet. | Entradas `/api/` y `/runner/` protegidas detrás del proxy. | **Aislamiento**: Puertos internos cerrados al exterior. |
+| **Punto de Entrada API** | Fragmentado: llamadas directas a `App` y a `Runner` en internet. | Entrada única `/api/` (App). Runner y AccessManager solo en la red interna. | **Aislamiento**: Puertos internos cerrados al exterior. |
 | **Rol de Redis** | Sin rol claro o mezclado. | **EXCLUSIVAMENTE Message Queue (Streams)**. | **Event-Driven puro**: Procesa tareas con Consumer Groups y ACKs manuales. |
 | **Políticas de Autorización** | Chatty HTTP con posible desincronización. | Consulta directa a `AccessManager` (Sin caché). | **Consistencia Inmediata**: Cero bugs de *stale permissions*; única fuente de verdad. |
 | **Gestión de Código Fuente** | Llamadas cruzadas desordenadas. | `AssetService` como repositorio central estricto. | **Integridad de Assets**: Código versionado y desacoplado de la base relacional. |

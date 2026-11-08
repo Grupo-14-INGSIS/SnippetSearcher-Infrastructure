@@ -127,18 +127,18 @@ se lo pide al Runner por HTTP, y cuando se borra un snippet le pide al Runner qu
 
 ### Crear un snippet
 ```
-UI ──PUT /runner/api/v1/snippets/{id}──▶ Runner
+UI ──PUT /api/v1/snippets/{id}──▶ App (dueño = token) ──▶ Runner
    1. valida la sintaxis (ValidationPlugin)        → 400 si es inválido
    2. storage.exists(id)                           → 400 si ya existe
    3. storage.save(id, código)                     → 502 si el bucket no lo guardó (y NO sigue)
-   4. App: PUT /api/v1/snippets/{id}               → guarda metadatos + permiso owner
+   4. App: PUT /internal/snippets/{id}             → guarda metadatos + permiso owner
                                                      + encola el primer linteo (Redis)
    5. 201 Created con {id, name, content, language, version}
 ```
 
 ### Editar el contenido
 ```
-UI ──PATCH /runner/api/v1/snippets/{id}──▶ Runner
+UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──▶ Runner
    1. valida la sintaxis
    2. storage.save(id, código nuevo)               → 502 si falla (upsert: sirve aunque no existiera)
    3. App: POST /api/v1/snippets/{id}/lint-jobs (con el JWT del usuario) → "pending" + trabajo en Redis
