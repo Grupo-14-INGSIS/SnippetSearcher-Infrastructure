@@ -100,6 +100,9 @@ UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──PATCH─�
 | Credenciales de Auth0 de App | **No hay**: App solo valida tokens | El `clientSecret` que estaba en `application.yml` se borró |
 | Credenciales de la UI (`VITE_AUTH0_*`) | Secrets del repo de la UI | Son públicas por naturaleza: van en el bundle del navegador |
 
+En qué paso de qué workflow se usa cada secret y variable, y cómo llegan a los contenedores:
+[PIPELINE_CI_CD.md, sección 7](PIPELINE_CI_CD.md#7-secrets-variables-y-environments).
+
 **Claves en el historial de Git:** el `clientSecret` de Auth0 y la license key de New Relic se sacaron del código,
 pero siguen en commits viejos. **Decisión: no se rotan.** Es un TP con cuentas de prueba, y es un riesgo aceptado.
 En un proyecto real habría que rotarlas: Auth0 → Applications → la aplicación → Credentials → Rotate, y
