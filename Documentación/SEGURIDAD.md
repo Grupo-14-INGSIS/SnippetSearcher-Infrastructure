@@ -100,8 +100,10 @@ UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──PATCH─�
 | Credenciales de Auth0 de App | **No hay**: App solo valida tokens | El `clientSecret` que estaba en `application.yml` se borró |
 | Credenciales de la UI (`VITE_AUTH0_*`) | Secrets del repo de la UI | Son públicas por naturaleza: van en el bundle del navegador |
 
-**Las claves que estuvieron en el repo hay que rotarlas**, aunque ya no estén en el código: siguen en el historial
-de Git. Ver la [sección 8](#8-pendientes).
+**Claves en el historial de Git:** el `clientSecret` de Auth0 y la license key de New Relic se sacaron del código,
+pero siguen en commits viejos. **Decisión: no se rotan.** Es un TP con cuentas de prueba, y es un riesgo aceptado.
+En un proyecto real habría que rotarlas: Auth0 → Applications → la aplicación → Credentials → Rotate, y
+New Relic → API Keys, actualizando después el secret `NEW_RELIC_LICENSE_KEY` de los environments de Infra.
 
 **Logs:** no se loguean tokens ni contraseñas. Los logs de cambios de estado registran el id del usuario (`sub` de
 Auth0), no su token.
@@ -147,22 +149,18 @@ dueño del token, edición solo del dueño) e `InternalSnippetControllerTest`.
 | `401` sin identidad, `403` sin permiso | ✅ | Spring Security y los chequeos de App |
 | Autorización de dominio (dueño o compartido) | ✅ | ACL en AccessManager |
 | Chequear scopes | ⚠️ | No se usan; justificado en la sección 3 |
-| No guardar secretos en el código | ⚠️ | Se sacaron del código; falta rotarlos y sacar las contraseñas de las bases del stack |
+| No guardar secretos en el código | ⚠️ | Se sacaron del código. No se rotan (decisión, sección 5). Faltan las contraseñas de las bases del stack |
 | Token fuera de `localStorage` (XSS) | ⚠️ | La UI usa `cacheLocation="localstorage"` (ver pendientes) |
 
 ---
 
 ## 8. Pendientes
 
-1. **Rotar el `clientSecret` de Auth0** de la aplicación cuyo `clientId` estaba en `application.yml` (Auth0 →
-   Applications → la aplicación → Credentials → Rotate). App no lo usa, así que no hay que configurarlo en ningún lado.
-2. **Rotar la license key de New Relic** (New Relic → API Keys) y actualizar el secret `NEW_RELIC_LICENSE_KEY` en
-   los environments `develop` y `production` de Infra.
-3. **Contraseñas de las bases fuera del stack:** pasarlas a secrets de GitHub o de Swarm (ver `VM_LIMPIA.md`).
-4. **Token en memoria:** cambiar `cacheLocation` a `memory` reduce el riesgo ante XSS, pero obliga a renovar la
+1. **Contraseñas de las bases fuera del stack:** pasarlas a secrets de GitHub o de Swarm (ver `VM_LIMPIA.md`).
+2. **Token en memoria:** cambiar `cacheLocation` a `memory` reduce el riesgo ante XSS, pero obliga a renovar la
    sesión al recargar la página, y eso falla en navegadores que bloquean cookies de terceros. Se dejó
    `localstorage` con *refresh tokens* rotativos como compromiso.
-5. **Scopes (opcional):** en Auth0, activar *RBAC* y *Add Permissions in the Access Token* en la API, crear permisos
+3. **Scopes (opcional):** en Auth0, activar *RBAC* y *Add Permissions in the Access Token* en la API, crear permisos
    como `read:snippets` y `write:snippets`, pedirlos desde la UI y exigirlos en `SecurityConfig.kt` con
    `hasAuthority("SCOPE_read:snippets")`. Hay que hacerlo todo junto: si App los exige antes de que Auth0 los
    emita, todas las requests dan `403`.
