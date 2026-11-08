@@ -425,7 +425,8 @@ Qué mirar mientras corren: **APM & Services** de App (tiempo de respuesta y thr
 - **Baja de tráfico sin caída:** no se detecta.
 - **Muting rules:** no hay. Cuando se apaga una VM, se disparan varias alertas a la vez.
 - **`Excessive response time` en 0,3 s:** a propósito para la demo; después conviene subirlo a unos 2 s.
-- **License key:** ya no está en el código, pero quedó en el historial de Git. Hay que rotarla (ver [SEGURIDAD.md](SEGURIDAD.md)).
+- **License key:** ya no está en el código, pero quedó en el historial de Git. **Decisión: no se rota**, porque es
+  un TP y la cuenta es de prueba. Es un riesgo aceptado (ver [SEGURIDAD.md](SEGURIDAD.md), sección 5).
 - **`VM - Sin datos`:** falta comprobar que dispara con *Lost signal* (ver sección 9).
 
 ---

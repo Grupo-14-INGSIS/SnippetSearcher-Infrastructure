@@ -20,6 +20,8 @@ Toda la documentación arquitectónica y operativa se encuentra en la carpeta [`
 * **[Seguridad](Documentación/SEGURIDAD.md)**: Autenticación con Auth0, autorización por dueño y compartido, qué está expuesto a internet y dónde viven los secretos.
 * **[New Relic](Documentación/NEW_RELIC.md)**: Qué se monitorea (trazas, métricas, Synthetics, logs, dashboards y alertas), dónde verlo, consultas NRQL, cómo seguir un request por su id y cómo mostrar cada alerta.
 * **[Tests de carga con Locust](Documentación/LOCUST.md)**: Qué hace, cómo correrlo, qué mirar y qué alertas puede activar.
+* **[Bases de datos](Documentación/BASE_DE_DATOS.md)**: Tablas y columnas de cada base, Redis y el bucket, cómo se relacionan y qué toca cada operación.
+* **[Extras de noviembre 2026](Documentación/EXTRAS_NOVIEMBRE_2026.md)**: Solo lo que se agregó o cambió en esa tanda (arquitectura, seguridad, deploy, New Relic, Locust).
 
 ---
 

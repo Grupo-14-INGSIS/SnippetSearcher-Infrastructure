@@ -230,12 +230,9 @@ curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" \
   `docker-compose.yml` dicen `Username-Password-Authentication`, que **no** está habilitada. Hoy no
   rompe porque esas variables no se usan en runtime, pero conviene dejarlas en `User-Pass-Auth` (o
   borrarlas) y confirmar el valor del secret `VITE_AUTH0_REALM` en el repo de la UI.
-- **Audience no validado en la App:** solo se valida el `issuer`. El repo `auth0-integration` muestra
-  cómo agregar un `AudienceValidator` en un `JwtDecoder` propio para rechazar tokens emitidos para
-  otra API del mismo tenant.
-- **Scopes no aplicados:** se piden `read/write/delete:snippets` pero el backend solo exige
-  `isAuthenticated()`. Se podría usar `hasAuthority("SCOPE_write:snippets")` como en
-  `auth0-integration`.
-- **Secret en el repo:** `application.yml` de la App tiene `auth0.clientSecret` en texto plano y la
-  App no lo usa. Sacarlo, pasarlo a variable de entorno si hace falta, y rotarlo en Auth0.
+- **Audience:** ✅ resuelto. App valida `aud = https://api.snippets.com` (`audiences` en `application.yml`).
+- **Scopes no aplicados:** el backend solo exige `isAuthenticated()` más el permiso por snippet.
+  Justificación y cómo sumarlos en [SEGURIDAD.md](SEGURIDAD.md).
+- **Secret en el repo:** ✅ el `clientSecret` se sacó de `application.yml` (App no lo usaba). Queda en el
+  historial de Git y no se rota, por decisión (ver [SEGURIDAD.md](SEGURIDAD.md), sección 5).
 - **Código muerto:** `authService.ts` / `authContext.tsx` en la UI.
