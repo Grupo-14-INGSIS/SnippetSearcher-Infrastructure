@@ -40,6 +40,8 @@ jobs:
     env:
       STACK: snippetsearcher
       DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+      # Para docker-stack.yml: App, Runner y AccessManager toman la clave de New Relic de acá (no del repo)
+      NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
       NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
       NEW_RELIC_APP_NAME_RUNNER: ${{ vars.NEW_RELIC_APP_NAME_RUNNER }}
       NEW_RELIC_APP_NAME_ACCESS: ${{ vars.NEW_RELIC_APP_NAME_ACCESS }}

@@ -45,6 +45,7 @@ services:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-34259c280eca430575933ee94aa61123ce888f3d
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
       JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: app
       DB_PASSWORD: app
@@ -104,6 +105,7 @@ services:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production-e5db4aa9e98a67ecdc4953c288f03afa5efa4f87
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
       JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: app
       DB_PASSWORD: app
@@ -167,6 +169,7 @@ services:
     image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production-d8ee84c39ca08361461e25c0c5dd9890d3520713
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
       JAVA_TOOL_OPTIONS: *java-opts
       DB_USER: access_manager
       DB_PASSWORD: access_manager
