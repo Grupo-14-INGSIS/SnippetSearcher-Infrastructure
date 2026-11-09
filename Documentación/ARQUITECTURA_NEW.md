@@ -239,9 +239,14 @@ asset --> azurite : Almacena blobs
   ```
 * El `LanguageRunnerRegistry` registra automáticamente los plugins anotados con `@Component` (`PrintScriptLanguageRunner`, etc.), permitiendo extender a nuevos lenguajes sin tocar los controladores (Open/Closed Principle).
 
-#### D. Rediseño de Base de Datos y Eliminación de `jsonb` y `text[]`
-* Tablas relacionales normalizadas (`user_language_rules`, `test_cases`, `test_inputs`, `test_outputs`).
-* Integridad referencial con `CONSTRAINT fk_test_snippet FOREIGN KEY (id_snippet) REFERENCES snippet(id) ON DELETE CASCADE`.
+#### D. Eliminación de `jsonb`
+**Implementado (noviembre 2026):** ya no hay columnas `jsonb`. Detalle en [BASE_DE_DATOS.md](BASE_DE_DATOS.md).
+* Reglas de formateo y linteo: una fila por regla en `formatting_rule_values` / `linting_rule_values`, con su tipo
+  (`boolean`, `number` o `string`) y clave foránea `ON DELETE CASCADE` a la regla del usuario.
+* Variables de entorno de los tests: una fila por variable en `test_environment`, con `ON DELETE CASCADE` a `test`.
+
+**No implementado** de la propuesta original: `in_put`/`out_put` siguen como `text[]` (se leen y escriben siempre
+enteros y en orden), y `test` no tiene clave foránea a `snippet` (el borrado en cascada lo hace App).
 
 #### E. Trazabilidad Unificada con New Relic
 * El header `X-Request-Id` se propaga en cascada a través de todos los clientes HTTP (`AppClient`, `RunnerClient`, `AccessManagerClient`) y se asocia al MDC de logs.
@@ -258,7 +263,7 @@ asset --> azurite : Almacena blobs
 | **Rol de Redis** | Sin uso claro o mezclado. | **Pros (Cola Pura)**: EXCLUSIVAMENTE cola de mensajería (Redis Streams) para linteo y formateo masivo tolerante a fallos. |
 | **Políticas de Autorización** | Chatty HTTP con posible inconsistencia. | **Pros**: Consulta directa en tiempo real a `AccessManager`. Cero datos obsoletos (*zero stale permissions*). |
 | **Soporte de Lenguajes** | PrintScript hardcodeado dentro del Runner. | **Pros**: Engine Central con Plugins (`LanguageRunner`). Soporta Python, Go o Rust mediante Strategy Pattern. |
-| **Persistencia de Reglas** | Uso de `jsonb` en Postgres con `Map<String, Any>` sin tipado. | **Pros**: Tablas relacionales normalizadas con tipos estrictos e integridad referencial `ON DELETE CASCADE`. |
+| **Persistencia de Reglas** | Uso de `jsonb` en Postgres con `Map<String, Any>` sin tipado. | **Pros**: Una fila por regla, con su tipo, e integridad referencial `ON DELETE CASCADE`. Sin `jsonb`. |
 | **Trazabilidad New Relic** | Trazas partidas en árboles independientes. | **Pros**: Traza distribuida continua y unificada con correlación por `X-Request-Id` de punta a punta. |
 | **Cantidad de Microservicios** | 3 servicios desbalanceados y riesgo de un 4to innecesario. | **3 servicios justificados y balanceados**: Negocio/BFF (`App`), Seguridad/Políticas (`AccessManager`) y Cómputo/Sandbox (`Runner`). |
 

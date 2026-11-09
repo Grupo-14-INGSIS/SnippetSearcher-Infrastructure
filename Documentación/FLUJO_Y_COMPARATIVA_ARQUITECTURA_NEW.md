@@ -243,5 +243,5 @@ deactivate app
 | **Políticas de Autorización** | Chatty HTTP con posible desincronización. | Consulta directa a `AccessManager` (Sin caché). | **Consistencia Inmediata**: Cero bugs de *stale permissions*; única fuente de verdad. |
 | **Gestión de Código Fuente** | Llamadas cruzadas desordenadas. | `AssetService` como repositorio central estricto. | **Integridad de Assets**: Código versionado y desacoplado de la base relacional. |
 | **Extensibilidad de Lenguajes** | PrintScript hardcodeado en Runner. | **Engine Central + Plugins** (`LanguageRunner`). | **Open/Closed Principle**: Nuevos lenguajes se integran con Strategy Pattern. |
-| **Modelo de Base de Datos** | Antipatrón `jsonb` y `text[]` no tipados. | Tablas normalizadas (`compliant BOOLEAN` en Postgres). | **Integridad Referencial y Type Safety**. |
+| **Modelo de Base de Datos** | Antipatrón `jsonb` y `text[]` no tipados. | Sin `jsonb`: reglas y variables de entorno en tablas, una fila por valor, con `ON DELETE CASCADE`. `compliant BOOLEAN`. Los inputs y outputs de los tests siguen como `text[]`. | **Integridad Referencial y Type Safety**. |
 | **Monitoreo & Observabilidad** | Trazas fragmentadas e inconexas. | Traza unificada `X-Request-Id` desde Nginx hasta AssetService. | **New Relic Full Tracing**: Un solo árbol de transacción para toda la petición. |

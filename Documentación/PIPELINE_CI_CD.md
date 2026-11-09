@@ -124,7 +124,7 @@ rama con un PR abierto dispara los dos.
 | `ktlintCheck` | Estilo | Bloquea |
 | `detekt` | Análisis estático (complejidad, malas prácticas) | Bloquea |
 | `test` | Tests unitarios | Bloquea |
-| `jacocoTestCoverageVerification` | Cobertura mínima (App y AccessManager 80%, Runner 65%) | Bloquea |
+| `jacocoTestCoverageVerification` | Cobertura mínima de 80% de instrucciones en los tres servicios (App, Runner y AccessManager) | Bloquea |
 | `build` | Arma el `.jar` | Bloquea |
 | `build-and-push` (otro job, `needs: ci-cd`) | `docker build` + push a GHCR con `GITHUB_TOKEN` | No hay imagen nueva |
 | `update-infra` (otro job, `needs: build-and-push`) | Escribe la versión en Infra (sección 4) | No se despliega |
