@@ -1,5 +1,15 @@
 # INFORME DE ANÁLISIS ARQUITECTÓNICO: SNIPPETSEARCHER
 
+## Vista rápida
+
+Los 4 servicios, sus bases y con quién habla cada uno. La UI solo habla con App, a través de nginx. Runner y
+AccessManager son internos. Las vistas detalladas están en la [sección 3](#3-arquitectura-nueva-optimizada).
+
+![Arquitectura simple](diagramas/arquitectura_simple.png)
+
+Fuente: [`diagramas/arquitectura_simple.puml`](diagramas/arquitectura_simple.puml). Basado en el `uml_graph` original
+de diciembre de 2025, actualizado a la arquitectura actual.
+
 ---
 
 ## 1. Contexto y Restricciones Obligatorias

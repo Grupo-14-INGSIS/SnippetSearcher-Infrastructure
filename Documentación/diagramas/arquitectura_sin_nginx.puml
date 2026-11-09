@@ -25,23 +25,22 @@ package "Capa de Datos y Almacenamiento" {
     database "Azurite\n(Azure Blob Emulator)" as azurite
 }
 
-' Flujos de cliente
 client -right-> auth0 : 1. Autenticación (JWT)
 client --> ui : Usa interfaz web
 
-' Comunicación directa Frontend -> Servicios (sin Nginx)
-ui --> app : Llamadas de negocio, metadatos, CRUD snippets (:19081)
-ui --> runner : Ejecución interactiva y lectura de código (:19082)
+ui --> app : Llamadas de negocio, metadatos, permisos (/api/v1)
+app --> runner : Creación, edición y lectura de código (red interna)
 
-' Comunicación entre Microservicios
 app --> access : Consulta permisos síncronos
-access --> accessdb : Persiste roles (owner / shared)
-
+access --> accessdb : Persiste roles
 app --> appdb : Persiste metadata y tests
-app --> redis : Encola eventos (job:lint:all, job:format:all)
 
-redis --> runner : Consume eventos en background
-runner --> app : Notifica status de linteo / tests
+' Redis Streams
+app --> redis : 1. Encola en stream 'snippet-jobs'
+redis --> runner : 2. Consume tareas en background ('runner_group')
+runner --> redis : 3. Emite resultados en 'snippet-job-results'
+redis --> app : 4. Consume resultados ('app_group')
+
 runner --> runnerdb : Persiste reglas de usuario
 runner --> asset : Descarga / sube archivos de código
 asset --> azurite : Almacena blobs
