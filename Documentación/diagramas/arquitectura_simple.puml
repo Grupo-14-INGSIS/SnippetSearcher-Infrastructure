@@ -1,36 +1,56 @@
 @startuml
-' Vista simple: los 4 servicios, sus bases y con quién habla cada uno.
+' Vista simple: los 4 servicios, sus bases y con quién habla cada uno, por capas.
 ' Basado en el uml_graph original (dic. 2025), actualizado a la arquitectura actual.
-' Generar la imagen: java -jar plantuml.jar -tpng arquitectura_simple.puml
-
-cloud Auth0
-agent UI
-agent "nginx" as nginx
-
-together {
-  agent App
-  agent Runner
+' Generar la imagen: java -jar plantuml.jar -tpng -Playout=smetana arquitectura_simple.puml
+left to right direction
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam roundCorner 10
+skinparam ArrowColor #444444
+skinparam rectangle {
+  BackgroundColor #F4F6FA
+  BorderColor #5B6B82
 }
-agent AccessManager
+skinparam database {
+  BackgroundColor #FFFFFF
+  BorderColor #5B6B82
+}
 
-database appdb
-database "runner-db" as runnerdb
-database "accessmanager-db" as amdb
-agent "redis-streams" as redis
-agent "asset-service" as asset
-database Azurite
+actor "Usuario\n(navegador)" as user
+cloud "Auth0" as auth0
 
-UI -up-> Auth0 : login
-UI -down-> nginx
-nginx -down-> App : /api
-App -right-> Runner : código
-Runner -left-> App : /internal
-App -down-> AccessManager : permisos
-App -left-> appdb
-App <-down-> redis : trabajos y resultados
-redis <-down-> Runner
-Runner -down-> runnerdb : reglas
-Runner -down-> asset
-asset -down-> Azurite
-AccessManager -down-> amdb
+rectangle "nginx\nentrada única (HTTPS)" as nginx
+
+rectangle "UI\n(React)" as ui
+rectangle "App\nAPI pública y lógica" as app
+rectangle "AccessManager\npermisos" as am
+rectangle "Runner\nejecuta, formatea, lintea" as runner
+
+queue "Redis Streams\ncola de trabajos" as redis
+rectangle "asset-service" as asset
+
+database "appdb\nsnippets, tests, usuarios" as appdb
+database "accessmanager-db\ndueños y compartidos" as amdb
+database "runner-db\nreglas" as rdb
+database "Azurite\ncódigo de los snippets" as az
+
+user --> auth0 : login
+user --> nginx
+nginx --> ui : /
+nginx --> app : /api
+app ..> auth0 : valida tokens
+
+app --> am : ¿puede?
+app --> runner : código, ejecuciones,\ntests, reglas
+runner --> app : registra snippets,\npide linteos y tests
+
+app --> redis
+redis --> runner : trabajos
+runner --> redis : resultados
+
+am --> amdb
+app --> appdb
+runner --> rdb
+runner --> asset
+asset --> az
 @enduml

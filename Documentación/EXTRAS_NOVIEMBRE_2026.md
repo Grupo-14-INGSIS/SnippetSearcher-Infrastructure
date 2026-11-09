@@ -13,6 +13,7 @@ link de la última columna.
 - [7. Decisiones tomadas](#7-decisiones-tomadas)
 - [8. Qué queda por hacer](#8-qué-queda-por-hacer)
 - [9. Orden de deploy](#9-orden-de-deploy)
+- [10. Sin JSONB en las bases (9/11)](#10-sin-jsonb-en-las-bases-911)
 
 ---
 
@@ -146,3 +147,30 @@ en vez de `develop`, y PR `develop` → `production` en los servicios.
    `SELECT count(*) FROM Log WHERE service = 'nginx' FACET status, domain SINCE 30 minutes ago` tiene que traer filas.
    Si no trae nada, `docker service logs snippetsearcher_nginx-logs` muestra por qué (por ejemplo, un `403` de la
    Log API si la license key es de otra región).
+
+---
+
+## 10. Sin JSONB en las bases (9/11)
+
+Las dos columnas JSONB pasaron a tablas con una fila por valor. Para la UI y la API no cambia nada.
+
+| Antes | Ahora | Repo |
+| :--- | :--- | :--- |
+| `formatting_rules.config_rules` y `linting_rules.config_rules` (JSONB) en runner-db | `formatting_rule_values` y `linting_rule_values`: una fila por regla, con `rule_value` y `value_type` (`boolean`, `number`, `string`) | Runner: `FormattingRule`, `LintingRule`, `RuleValue` |
+| `test.config_rules` (JSONB) en appdb | `test_environment`: una fila por variable de entorno | App: `Test` |
+
+Las dos tablas nuevas tienen clave foránea con `ON DELETE CASCADE`. Los inputs y outputs de los tests siguen como
+`text[]`. Detalle de tablas y columnas en [BASE_DE_DATOS.md](BASE_DE_DATOS.md).
+
+**Para deployarlo** (en cada ambiente: primero dev, después prod), hay que migrar los datos que ya existen:
+
+| Paso | Qué |
+| :--- | :--- |
+| 1 | En la VM: correr `002-app-test-environment.sql` en appdb y `003-runner-reglas.sql` en runner-db. Crean las tablas nuevas y copian los datos. El código viejo las ignora |
+| 2 | Pushear (o mergear a `production`) App y Runner, como cualquier cambio |
+| 3 | Cuando terminen sus deploys, correr de nuevo `002` y `003`: copian lo que se haya cambiado entre el paso 1 y el deploy |
+| 4 | Probar: la pantalla de reglas muestra las reglas del usuario, y un test con variables de entorno las conserva y pasa |
+| 5 | Recién ahí, `004-app-borrar-config-rules.sql` en appdb y `005-runner-borrar-config-rules.sql` en runner-db: borran las columnas JSONB |
+
+Los comandos exactos están en [BASE_DE_DATOS.md](BASE_DE_DATOS.md), sección 8. Si se saltea el paso 1, el código
+nuevo arranca con las tablas vacías: los usuarios ven sus reglas vacías hasta que se corra `003`.

@@ -22,8 +22,16 @@ CREATE TABLE IF NOT EXISTS test
     id_snippet VARCHAR(255) NOT NULL,
     in_put TEXT[],
     out_put TEXT[],
-    version TEXT,
-    config_rules JSONB
+    version TEXT
+);
+
+-- Variables de entorno de cada test: una fila por variable (antes era el JSONB test.config_rules)
+CREATE TABLE IF NOT EXISTS test_environment
+(
+    id_test VARCHAR(255) NOT NULL REFERENCES test (id_test) ON DELETE CASCADE,
+    env_name VARCHAR(255) NOT NULL,
+    env_value TEXT,
+    PRIMARY KEY (id_test, env_name)
 );
 
 CREATE TABLE IF NOT EXISTS userdata
