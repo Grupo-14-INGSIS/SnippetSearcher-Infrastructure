@@ -42,7 +42,7 @@ services:
   # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
   # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
   snippetsearcher-app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-34259c280eca430575933ee94aa61123ce888f3d
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-bd9ea3487e1bc4aae91ddd426fe27875a329e4be
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -102,7 +102,7 @@ services:
   # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production-e5db4aa9e98a67ecdc4953c288f03afa5efa4f87
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production-461d1c591dd64812dd3033ef53e00da19856b6a6
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -166,7 +166,7 @@ services:
   # AccessManager (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production-d8ee84c39ca08361461e25c0c5dd9890d3520713
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production-0f414d9eea0d9df1fe730dcae87cd27b74caa73c
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -205,7 +205,7 @@ services:
   # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
   # -------------------------------------------------------------
   snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:production-1b2d9b087bd0eacc0c3c8b1790241ed283cafcc4
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:production-9407ebf97c2cf43d70353bb1f3d7d1108771e950
     # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
     # de localhost, llama a window.location.origin (/api, /runner): todo pasa por el reverse-proxy.
     environment:

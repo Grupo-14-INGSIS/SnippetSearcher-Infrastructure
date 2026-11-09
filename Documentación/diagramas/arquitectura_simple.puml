@@ -1,0 +1,36 @@
+@startuml
+' Vista simple: los 4 servicios, sus bases y con quién habla cada uno.
+' Basado en el uml_graph original (dic. 2025), actualizado a la arquitectura actual.
+' Generar la imagen: java -jar plantuml.jar -tpng arquitectura_simple.puml
+
+cloud Auth0
+agent UI
+agent "nginx" as nginx
+
+together {
+  agent App
+  agent Runner
+}
+agent AccessManager
+
+database appdb
+database "runner-db" as runnerdb
+database "accessmanager-db" as amdb
+agent "redis-streams" as redis
+agent "asset-service" as asset
+database Azurite
+
+UI -up-> Auth0 : login
+UI -down-> nginx
+nginx -down-> App : /api
+App -right-> Runner : código
+Runner -left-> App : /internal
+App -down-> AccessManager : permisos
+App -left-> appdb
+App <-down-> redis : trabajos y resultados
+redis <-down-> Runner
+Runner -down-> runnerdb : reglas
+Runner -down-> asset
+asset -down-> Azurite
+AccessManager -down-> amdb
+@enduml

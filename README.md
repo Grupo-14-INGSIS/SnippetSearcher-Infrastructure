@@ -2,6 +2,11 @@
 
 Repositorio central de infraestructura, orquestación y despliegue continuo (CI/CD) para el ecosistema **SnippetSearcher**.
 
+![Arquitectura simple](Documentación/diagramas/arquitectura_simple.png)
+
+La UI solo habla con App, a través de nginx. Runner y AccessManager son internos. Detalle en
+[Arquitectura](Documentación/ARQUITECTURA_NEW.md) y en [Bases de datos](Documentación/BASE_DE_DATOS.md).
+
 ---
 
 ## 1. Índice de Documentación Técnica
