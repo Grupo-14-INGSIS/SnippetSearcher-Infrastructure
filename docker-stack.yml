@@ -26,6 +26,22 @@ x-spring-restart: &spring-restart
   condition: any
   delay: 10s
 
+# Arranque de los servicios Spring: esperan a que su base (DB_HOST:DB_PORT) acepte conexiones antes
+# de lanzar la JVM. Swarm no tiene `depends_on`: al prender la VM o en un deploy levanta todo a la
+# vez, y si el servicio arrancaba antes que su Postgres, Spring fallaba ("connection attempt failed",
+# exit 1) y Swarm lo tomaba como versión rota y hacía rollback. Los 5 s extra cubren el momento en que
+# Postgres ya abrió el puerto pero todavía responde "the database system is starting up".
+# Lo que sigue a `exec` es el mismo ENTRYPOINT de los Dockerfile. `$$` es un `$` literal en el stack.
+x-wait-for-db: &wait-for-db
+  - bash
+  - -c
+  - |
+    echo "[arranque] esperando a la base $$DB_HOST:$$DB_PORT"
+    until bash -c "</dev/tcp/$$DB_HOST/$$DB_PORT" 2>/dev/null; do sleep 2; done
+    echo "[arranque] base disponible, arranca la aplicación"
+    sleep 5
+    exec java -javaagent:/usr/local/newrelic/newrelic.jar -jar /app/app.jar
+
 x-spring-update: &spring-update
   parallelism: 1
   delay: 10s
@@ -58,6 +74,7 @@ services:
       REDIS_PORT: 6379
       RUNNER_HOST: snippetsearcher-runner
       RUNNER_PORT: 8080
+    entrypoint: *wait-for-db
     healthcheck: *spring-healthcheck
     deploy:
       replicas: 2
@@ -118,6 +135,7 @@ services:
       REDIS_PORT: 6379
       APP_HOST: snippetsearcher-app
       APP_PORT: 8080
+    entrypoint: *wait-for-db
     healthcheck: *spring-healthcheck
     deploy:
       replicas: 2
@@ -176,6 +194,7 @@ services:
       DB_NAME: compose-db
       DB_HOST: accessmanager-db
       DB_PORT: 5432
+    entrypoint: *wait-for-db
     healthcheck: *spring-healthcheck
     deploy:
       replicas: 2

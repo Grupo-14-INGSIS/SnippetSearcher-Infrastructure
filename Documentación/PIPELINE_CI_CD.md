@@ -447,6 +447,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 | Mecanismo | Configuración (`docker-stack.yml`) | Efecto |
 | :--- | :--- | :--- |
 | Healthcheck | `bash -c '</dev/tcp/127.0.0.1/8080'`, `start_period: 900s` | Swarm solo manda tráfico a réplicas que abrieron el 8080. Los 15 minutos de gracia cubren el arranque al prender la VM: 6 JVM sobre 2 CPUs (load average ~28). Con 7 minutos, el App no llegaba, Swarm lo mataba como `unhealthy` (exit 137) y el ciclo no terminaba. |
+| Espera a la base | `entrypoint: *wait-for-db` en App, Runner y AccessManager | Antes de lanzar la JVM, cada servicio espera a que su Postgres (`DB_HOST:DB_PORT`) acepte conexiones, y 5 s más. Swarm no tiene `depends_on`: al prender la VM o en un deploy levanta todo a la vez, y si un servicio llegaba antes que su base, Spring fallaba (`connection attempt failed`, exit 1) y Swarm hacía rollback. Funciona en cualquier arranque, sin nada instalado en la VM. Mientras espera, el log muestra `[arranque] esperando a la base ...`. |
 | Opciones de la JVM | `JAVA_TOOL_OPTIONS: -XX:TieredStopAtLevel=1` | Solo el compilador JIT rápido: arranque más corto y mucho menos CPU al inicio, a cambio de algo menos de rendimiento sostenido. |
 | Rolling update | `parallelism: 1`, `order: start-first` | Levanta la réplica nueva antes de bajar la vieja: actualizar no corta el servicio. |
 | Rollback | `failure_action: rollback`, `monitor: 60s` | Si la versión nueva no pasa el healthcheck, vuelve sola a la anterior. |

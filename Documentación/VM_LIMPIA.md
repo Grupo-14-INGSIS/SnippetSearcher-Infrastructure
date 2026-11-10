@@ -70,6 +70,14 @@ esquema sobre una base existente no van ahí sino en `db/migrations/` y se corre
 
 ## Apagado y arranque ordenados (systemd)
 
+> **Noviembre 2026: el orden de arranque ahora lo resuelve el stack.** App, Runner y AccessManager esperan a que su
+> base acepte conexiones antes de lanzar la JVM (`entrypoint: *wait-for-db` en `docker-stack.yml`, ver
+> [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md), sección 8). Eso cubre el caso en que un servicio arrancaba antes que su
+> Postgres y se caía, en cualquier arranque: al prender la VM, en un deploy o en un reinicio, y sin instalar nada en
+> la VM. El servicio de systemd de abajo **no se instala automáticamente** (hay que correr `install.sh` a mano en
+> cada VM) y ya no hace falta para el orden de arranque. Queda documentado por si vuelve a aparecer el problema de
+> DNS al apagar.
+
 **Problema.** Al apagar la VM, Docker se detenía con limpiezas de Swarm a medio hacer (`remove task failed ...
 context canceled`, `network ingress remove failed`). Al prender, Docker encontraba contenedores rotos (`RW layer
 for container ... not found`), Swarm recreaba todo de golpe y, a veces, algún servicio quedaba corriendo con su
