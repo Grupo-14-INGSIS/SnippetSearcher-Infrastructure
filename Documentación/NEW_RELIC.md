@@ -84,9 +84,49 @@ La license key tampoco está en el repo: el agente la toma de la variable `NEW_R
 
 ### Agente de infraestructura (VM y contenedores)
 En `SnippetSearcher-Infrastructure/.github/workflows/deploy.yml`, paso **Ensure New Relic infrastructure agent**:
-levanta el contenedor `newrelic-infra` (imagen `newrelic/infrastructure:2.0.1`) con `docker run`. No se instala nada en
-la VM. La clave sale del secret `NEW_RELIC_LICENSE_KEY` y el host se identifica con `NRIA_DISPLAY_NAME`
-(`snippet26dev` / `snippet26prod`) y `environment`. Detalle en [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md).
+levanta el contenedor `newrelic-infra` (imagen `newrelic/infrastructure:2.0.1`) con `docker run`. La clave sale del
+secret `NEW_RELIC_LICENSE_KEY` y el host se identifica con `NRIA_DISPLAY_NAME` (`snippet26dev` / `snippet26prod`) y
+`environment`. Detalle en [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md).
+
+#### Cómo un contenedor monitorea la VM sin instalar nada en ella
+Un contenedor normal está aislado: ve sus propios procesos, su propia red y su propio disco. El agente necesita ver
+los de la VM, así que se lo arranca con permisos para "mirar hacia afuera". En la VM solo hace falta Docker, que ya
+estaba:
+
+```
+┌──────────────────────────── VM (dev o prod) ────────────────────────────┐
+│  procesos · red · disco · cgroups          /var/run/docker.sock          │
+│        ▲         ▲      ▲       ▲                   ▲                    │
+│        │ --pid   │ --network    │ --cgroupns        │ (montado)          │
+│        │  =host  │  =host       │  =host            │                    │
+│        │         │  -v /:/host:ro (solo lectura)    │                    │
+│   ┌────┴─────────┴──────┴───────┴───────────────────┴────┐               │
+│   │            contenedor newrelic-infra                  │──► New Relic │
+│   └───────────────────────────────────────────────────────┘   (HTTPS)   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+| Opción de `docker run` | Qué le permite ver al agente | Qué sale en New Relic |
+| :--- | :--- | :--- |
+| `--pid=host` | Todos los procesos de la VM, no solo los suyos | CPU y carga de la VM entera (`SystemSample`). El detalle por proceso (`ProcessSample`) viene apagado por defecto y no se activó |
+| `--network=host` | La red de la VM | Tráfico de red de la VM (`NetworkSample`) |
+| `-v /:/host:ro` | El disco de la VM, montado en `/host` y **solo lectura** | Uso de disco (`diskUsedPercent`, `StorageSample`) |
+| `--cgroupns=host` | Los *cgroups* de la VM: cuánta CPU y memoria usa cada contenedor | Métricas por contenedor (`ContainerSample`) |
+| `-v /var/run/docker.sock:...` | La API de Docker: qué contenedores hay, sus nombres y etiquetas de Swarm | Estado y nombre de cada servicio (`label.com.docker.swarm.service.name`) |
+| `--privileged`, `--cap-add=SYS_PTRACE` | Leer información del sistema que un contenedor común no puede leer | Métricas completas de CPU, memoria y procesos |
+| `--restart unless-stopped` | Que vuelva solo al reiniciar la VM | Datos continuos, sin intervención |
+
+**Por qué `docker run` y no un servicio del stack:** Swarm no aplica `--privileged` ni `--pid=host` a sus servicios.
+Por eso el agente se levanta aparte, desde el mismo workflow de deploy, y solo se recrea si cambió la imagen o la
+configuración (lo detecta la etiqueta `config-hash`).
+
+**Qué se controla con esto:** CPU, memoria y disco de la VM (alertas `VM - CPU alta`, `VM - Memoria Alta`,
+`VM - Disco lleno`), que la VM siga reportando (`VM - Sin datos`), y cuántos contenedores corre cada servicio
+(`Servicio sin contenedores`, `Servicio con réplica caída`). Ver [sección 9](#9-alertas-qué-hace-cada-una-y-cómo-mostrarla).
+
+**El costo:** es un contenedor con mucho acceso a la VM. Se compensa con que el disco se monta en solo lectura, la
+imagen es la oficial de New Relic con versión fija (`2.0.1`) y la clave no queda en la línea de comandos (`-e` sin
+valor la toma del entorno del runner).
 
 ### Chequeo de salud del backend
 En **App**:

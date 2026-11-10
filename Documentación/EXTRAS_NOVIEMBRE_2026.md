@@ -66,6 +66,7 @@ Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `In
 | `concurrency` y reintentos en `update-infra` | **Mejorado.** `update-infra` ya existía (desde el 2/11) y escribe la versión de la imagen en el stack de Infra. Ahora, si llegan varios pushes juntos, no se pisan: los intermedios quedan `cancelled` y el último aplica el stack completo | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 | Verificación antes del `prune` | **Recuperado.** Existía desde el 18/10 y se había perdido. No se borran imágenes viejas hasta comprobar que los servicios nuevos levantaron | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 | Contenedor `newrelic-infra` | Métricas de la VM y de los contenedores sin instalar nada en la VM | [NEW_RELIC.md](NEW_RELIC.md) |
+| Espera a la base en el stack (`entrypoint: *wait-for-db`) | **Nuevo (10/11).** App, Runner y AccessManager no lanzan la JVM hasta que su Postgres acepta conexiones. Antes, si el servicio arrancaba primero, se caía y Swarm hacía rollback. Reemplaza al script de systemd de la VM, que no se instalaba solo | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md), sección 8 |
 | Servicio `nginx-logs` en el stack | Logs de nginx en New Relic, sin instalar nada en la VM. nginx loguea en JSON, le pasa el `X-Request-Id` a App y su log rota a los 10 MB | [NEW_RELIC.md](NEW_RELIC.md), sección 6 |
 | `develop` y `main` de Infra iguales | Solo difieren en las 4 líneas `image:` | [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md) |
 

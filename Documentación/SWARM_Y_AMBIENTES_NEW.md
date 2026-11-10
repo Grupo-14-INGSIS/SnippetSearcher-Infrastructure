@@ -14,7 +14,9 @@ Este documento recopila la arquitectura de despliegue, la configuración de infr
     1. El motor de contenedores (`Docker Engine` en modo `Swarm`).
     2. Los volúmenes persistentes de Docker (`app-pgdata`, `runner-pgdata`, `redis-data`, etc.).
     3. Los certificados SSL de Let's Encrypt (`/etc/letsencrypt/`) y la carpeta de desafíos webroot (`/var/www/certbot/`).
-    4. La unidad de systemd para apagado/encendido ordenado (`snippetsearcher-lifecycle`).
+    4. Opcional: la unidad de systemd para apagado ordenado (`snippetsearcher-lifecycle`). Se instala a mano y ya no
+       hace falta para el orden de arranque: de eso se encarga el stack (`entrypoint: *wait-for-db`, cada servicio
+       espera a su base).
 
 ---
 
