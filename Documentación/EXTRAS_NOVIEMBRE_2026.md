@@ -14,6 +14,7 @@ link de la última columna.
 - [8. Qué queda por hacer](#8-qué-queda-por-hacer)
 - [9. Orden de deploy](#9-orden-de-deploy)
 - [10. Sin JSONB en las bases (9/11)](#10-sin-jsonb-en-las-bases-911)
+- [11. Limpieza de código muerto (13/11)](#11-limpieza-de-código-muerto-1311)
 
 ---
 
@@ -175,3 +176,34 @@ Las dos tablas nuevas tienen clave foránea con `ON DELETE CASCADE`. Los inputs 
 
 Los comandos exactos están en [BASE_DE_DATOS.md](BASE_DE_DATOS.md), sección 8. Si se saltea el paso 1, el código
 nuevo arranca con las tablas vacías: los usuarios ven sus reglas vacías hasta que se corra `003`.
+
+---
+
+## 11. Limpieza de código muerto (13/11)
+
+Se revisaron los 5 repos buscando clases, funciones, archivos y configuración que nadie usa. Todo lo borrado se
+confirmó sin referencias, y después de borrar pasan lint, detekt, tests y la cobertura mínima (80 %) en cada servicio.
+No cambia el comportamiento visible.
+
+| Repo | Qué se borró | Por qué estaba muerto |
+| :--- | :--- | :--- |
+| App | 8 DTOs (`SnippetDownload`, `TaskRequest`, `ValidationRequest`, `ValidationResponse`, etc.) y el DTO `ExecutionEvent` (queda solo el enum `ExecutionEventType`) | Nadie los usaba |
+| App | `TestRepository.findTestIdsBySnippetId` | Consulta que nadie llamaba |
+| Runner | `SnippetCacheService` y su uso en `ExecutionService` | Guardaba cada salida de ejecución en Redis (`snippet:{id}:{version}`), sin TTL, y nadie la leía |
+| Runner | `MapJsonConverter` | Convertía los JSONB de las reglas; sin JSONB ya no se usa |
+| Runner | `TestPlugin` | Plugin de prueba que solo imprimía un cartel en consola |
+| Runner | `AppClient.sendLine`, `defaultHeaders` y su `logger`, y el DTO `ExecutionEvent` | `sendLine` estaba vacía (su código, comentado); el resto solo lo usaba ese código |
+| Runner | `ExecutionInputProvider.hasPendingInputs` | Nadie la llamaba |
+| UI | `runnerService.ts`, `FakeRunnerService` y `RUNNER_URL` | La UI ya no habla con el Runner: todo pasa por App |
+| UI | `authService.ts` y `authContext.tsx` | Login viejo con grant `password`; hoy se usa Auth0 |
+| UI | Hooks `useSendInput`, `useGetExecutionStatus`, `useRemoveTestCase`, y `sendInput` / `removeTestCase` de la API | Nadie los llamaba |
+| UI | `App.test.tsx`, `GetSnippetResponse`, `ExecutionRequest`, `ExecutionResponse`, `InputRequest`, `paginationParams`, `PaginatedUsers` | Archivo vacío y tipos sin uso |
+| UI, Infra | `VITE_RUNNER_URL` (Dockerfile, Cypress, `docker-stack.yml`, `docker-compose.yml`) y `APP_HOST` / `RUNNER_*` de la UI en `docker-compose.yml` | Ningún código las lee |
+| Infra | `.github/workflows/update_service.yml` | Workflow del esquema "dispatch": nadie lo dispara desde noviembre |
+
+Los tests que solo probaban código borrado se borraron con él.
+
+**No se borró, a propósito:**
+- El modo de prueba de la UI (`USE_MOCK_SERVICES` y `FakeSnippetOperations`): es una herramienta de desarrollo.
+- Los documentos viejos (los que tienen versión `_NEW`) y la carpeta `Deprecated`: son historia de la documentación.
+- `vm/snippetsearcher-lifecycle.*`: quedó como opcional (ver `VM_LIMPIA.md`).

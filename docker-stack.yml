@@ -239,7 +239,6 @@ services:
       - VITE_FRONTEND_URL=http://localhost:5173
       - VITE_API_URL=http://localhost:19081
       - VITE_BACKEND_URL=http://localhost:19081
-      - VITE_RUNNER_URL=http://localhost:19082
     deploy:
       replicas: 2
       restart_policy:

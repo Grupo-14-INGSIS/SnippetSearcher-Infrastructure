@@ -69,7 +69,6 @@ La presentación compara varios enfoques. Cada uno arregla algo del anterior:
 | `snippet-jobs` | Stream | App (productor) | Runner, grupo `runner_group` | Trabajos: "linteá / formateá el snippet X" |
 | `snippet-job-results` | Stream | Runner (productor) | App, grupo `app_group` | Resultados: "X dio compliant / not-compliant / formatted / failed" |
 | `snippet:lint-status` | Hash | App | App | `snippetId → "pending" \| "failed"` |
-| `snippet:{id}:{version}` | String | Runner | nadie (ver §12) | Última salida de ejecución |
 | `execution:{run\|test}:{userId}:{snippetId}:status` | String (TTL 10 min) | Runner | Runner (`/executions/status`) | `RUNNING` · `WAITING` · `COMPLETED` · `ERROR` |
 | `execution:{run\|test}:{userId}:{snippetId}:output` | List (TTL 10 min) | Runner | Runner (`/executions/status`) | Líneas impresas hasta ahora, en orden |
 
@@ -445,8 +444,10 @@ HGETALL snippet:lint-status                        # qué snippets están pendin
 
 ## 12. Limitaciones conocidas
 
-- **Cache de ejecución que nadie lee:** `ExecutionService` guarda la salida de cada ejecución en
-  `snippet:{id}:{version}` (sin TTL) y nunca la lee. Habría que borrarlo o ponerle TTL.
+- **Cache de ejecución:** ✅ resuelto. `ExecutionService` guardaba la salida de cada ejecución en
+  `snippet:{id}:{version}`, sin TTL y sin leerla nunca. Se borró (13/11/2026). Las claves que ya existan en Redis
+  quedan huérfanas: se pueden borrar con `redis-cli --scan --pattern 'snippet:*:*' | xargs redis-cli del`, cuidando
+  de no tocar `snippet:lint-status`.
 - **Esquema duplicado:** `SnippetJobMessages.kt` y la base de streams están copiados en App y Runner. Si se
   cambia un campo hay que cambiarlo en los dos. Una librería compartida, como hace la cátedra, lo evitaría.
 - **Salida del analizador por `System.out`:** el lock evita mezclar dos análisis, pero un log de otro hilo

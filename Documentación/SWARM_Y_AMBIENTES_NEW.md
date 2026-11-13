@@ -97,7 +97,7 @@ Cuando se hace push en `develop` o `production` de un microservicio (`App`, `Run
 
 **Si llegan muchos PR juntos:** cada `update-infra` reintenta hasta 6 veces si rechazan su push, volviendo a aplicar la versión sobre lo último de la rama. Cada microservicio corre un `update-infra` a la vez por rama, y `deploy.yml` corre un deploy a la vez por ambiente; si se acumulan, queda el último, que aplica el `docker-stack.yml` completo. Detalle en [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md).
 
-Un pull request solo corre el CI. `update_service.yml` y `repository_dispatch` pertenecen al esquema anterior y ya no se usan.
+Un pull request solo corre el CI. `update_service.yml` y `repository_dispatch` eran del esquema anterior: el workflow se borró del repo.
 
 ### D. Diferencias entre `develop` y `main` en Infra
 Las dos ramas solo difieren en las cuatro líneas `image:` de App, Runner, AccessManager y UI en `docker-stack.yml`. **No se mergean entre sí**: un merge podría poner imágenes de desarrollo en producción. Los demás cambios se aplican en las dos ramas (ver [PIPELINE_CI_CD.md](PIPELINE_CI_CD.md)).

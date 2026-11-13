@@ -104,13 +104,13 @@ Usuario          UI (React)                      Auth0                         A
 | `src/App.tsx` | Rutas. Todas protegidas salvo `/login`. |
 | `src/components/common/ProtectedRoute.tsx` | Mientras el SDK carga muestra *Loading authentication...*; si no hay sesión, `Navigate` a `/login`. |
 | `src/screens/Login.tsx` | Llama a `loginWithRedirect()` en un `useEffect`. |
-| `src/contexts/serviceContext.tsx` | Le pasa `getAccessTokenSilently` a `ApiSnippetOperations` y `RunnerService`. |
-| `src/services/api.ts`, `runnerService.ts` | Piden el token (con el `audience`) y agregan `Authorization: Bearer`. |
+| `src/contexts/serviceContext.tsx` | Le pasa `getAccessTokenSilently` a `ApiSnippetOperations`. |
+| `src/services/api.ts` | Pide el token (con el `audience`) y agrega `Authorization: Bearer`. La UI solo habla con App. |
 | `src/components/navbar/Navbar.tsx` | `logout({ logoutParams: { returnTo: window.location.origin } })`. |
 | `cypress/support/auth-provider-commands/auth0.ts` | Login de los tests E2E escribiendo en el formulario de Auth0 (`cy.origin`). |
 
-`src/services/authService.ts` y `src/contexts/authContext.tsx` son de una versión anterior (grant
-`password`) y **no se usan**: nadie monta `AuthProvider` ni llama a `useAuth`.
+`src/services/authService.ts` y `src/contexts/authContext.tsx`, de una versión anterior (grant `password`) que nadie
+usaba, se borraron el 13/11/2026.
 
 **Importante:** las `VITE_*` las fija Vite **al compilar**. Cambiarlas en el `environment:` del
 `docker-stack.yml` no tiene efecto; hay que volver a construir la imagen (en CI salen de los
@@ -235,4 +235,4 @@ curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" \
   Justificación y cómo sumarlos en [SEGURIDAD.md](SEGURIDAD.md).
 - **Secret en el repo:** ✅ el `clientSecret` se sacó de `application.yml` (App no lo usaba). Queda en el
   historial de Git y no se rota, por decisión (ver [SEGURIDAD.md](SEGURIDAD.md), sección 5).
-- **Código muerto:** `authService.ts` / `authContext.tsx` en la UI.
+- **Código muerto:** ✅ `authService.ts` y `authContext.tsx` se borraron de la UI (13/11/2026).
