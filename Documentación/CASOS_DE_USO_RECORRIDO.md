@@ -23,24 +23,26 @@ consulta HTTP al **AccessManager**, que lee **accessmanager-db**.
 ---
 
 ## US #1: Crear un snippet mediante archivo
-1. La UI lee el archivo y manda `PUT /api/v1/snippets/{id}` (Nginx → **App**) con nombre, lenguaje y código. El App toma al dueño del token y le pasa todo al **Runner** por la red interna.
+1. La UI lee el archivo y manda `PUT /api/v1/snippets/{id}` (Nginx → **App**) con nombre, lenguaje y código. El App toma al dueño del token y le pasa el código al **Runner** por la red interna.
 2. El **Runner** valida el código con el parser. Si es inválido, responde `400` con la regla, la línea y la columna, y no sigue.
-3. El Runner guarda el código en el **bucket** (`{id}` y `{id}_original`). Si el bucket falla, responde `502` y no registra nada.
-4. El Runner llama al **App** por la ruta interna (`PUT /internal/snippets/{id}`). El App guarda los metadatos en **appdb**, le da el permiso `owner` al creador en el **AccessManager** y encola el primer linteo en **Redis** (marca `pending` y hace `XADD` en `snippet-jobs`).
+3. El Runner guarda el código en el **bucket** (`{id}` y `{id}_original`) y le responde a App. Si el bucket falla, responde `502` y App no registra nada.
+4. Con la respuesta del Runner, el **App** guarda los metadatos en **appdb**, le da el permiso `owner` al creador en el **AccessManager** y encola el primer linteo en **Redis** (marca `pending` y hace `XADD` en `snippet-jobs`). Si algo de esto falla, App borra el código que el Runner acababa de guardar, para que no quede huérfano.
 5. Respuesta `201` a la UI. En segundo plano el linteo sigue el recorrido de la US #15, paso 3.
 
+El Runner nunca llama a App: solo responde lo que App le pide.
+
 ## US #2: Actualizar un snippet mediante archivo
-1. La UI manda el contenido nuevo con `PATCH /api/v1/snippets/{id}` (→ **App**). El App chequea que sea el dueño y se lo pasa al **Runner** con el token del usuario.
-2. El **Runner** valida con el parser (`400` con regla, línea y columna si es inválido) y guarda en el **bucket** (`{id}` y `{id}_original`).
-3. El Runner le pide al **App** un `POST .../lint-jobs` con el JWT del usuario. El App chequea permisos, busca al dueño en el **AccessManager** y encola el linteo en **Redis**.
-4. El Runner también dispara los tests del snippet (ver US #16).
+1. La UI manda el contenido nuevo con `PATCH /api/v1/snippets/{id}` (→ **App**). El App chequea que sea el dueño y le pasa el código al **Runner**.
+2. El **Runner** valida con el parser (`400` con regla, línea y columna si es inválido) y guarda en el **bucket** (`{id}` y `{id}_original`). Responde y termina ahí.
+3. El **App** pone `compliant = null` en **appdb** (el resultado anterior ya no vale), busca al dueño en el **AccessManager** y encola el linteo en **Redis**. Si encolar falla, el snippet queda *Pending* y lo retoma el reconciliador.
+4. El App corre los tests del snippet (ver US #16).
 5. Para el resto de los datos (descripción, versión), la UI llama a `PATCH /api/v1/snippets/{id}` en el **App**: chequea que sea `owner` y actualiza **appdb**.
 
 ## US #3: Crear un snippet en el editor
 Mismo recorrido que la **US #1**. La única diferencia está en la UI: el código sale del editor embebido en lugar de un archivo.
 
 ## US #4: Actualizar un snippet en el editor
-Mismo recorrido que la **US #2**: `PATCH` al Runner → parser → bucket → lint-job en el App → Redis → tests.
+Mismo recorrido que la **US #2**: App → Runner (parser y bucket) → App encola el linteo en Redis y corre los tests.
 Antes de guardar, el botón **Lint** del editor llama a `POST /api/v1/snippets/{id}/tasks/lint` (App → Runner, con las reglas del dueño en **runner-db**) para probar el código sin guardar nada.
 
 ## US #5: Ver todos los snippets
@@ -118,8 +120,7 @@ Con `applyToSnippets: true` sigue la US #15.
 6. Misma tolerancia a fallos que la US #12. Además, un reconciliador del App encola cada 5 minutos los snippets que nunca tuvieron resultado.
 
 ## US #16: Testing automático de snippets
-1. Se dispara solo al guardar un cambio de contenido (US #2 / #4): la UI → `PATCH` al **Runner** → **bucket**.
-2. Después de guardar y encolar el linteo, el Runner llama al **App** (`AppClient.testAll`, con el JWT del usuario).
-3. Por cada test del snippet en **appdb**, se hace `POST .../tests/{testId}/runs`: el App vuelve a llamar al **Runner**, que corre el test contra el código nuevo del **bucket** (igual que la US #9).
-4. El Runner junta los resultados y se los devuelve a la UI en la respuesta del PATCH (cuáles pasaron y cuáles fallaron).
-5. El resultado de los tests no cambia el update: el código ya quedó guardado en el paso 1.
+1. Se dispara solo al guardar un cambio de contenido (US #2 / #4), después de que el **Runner** guardó el código en el **bucket**.
+2. El **App** lee los tests del snippet en **appdb** y, por cada uno, le pide al **Runner** que lo corra contra el código nuevo (`POST /api/v1/testing`, igual que la US #9).
+3. El App junta los que fallaron y se los devuelve a la UI en la respuesta del `PATCH`. Si alguno falló, el texto dice "test results" y la UI muestra el aviso amarillo.
+4. El resultado de los tests no cambia el update: el código ya quedó guardado. Si los tests no se pueden correr, el `PATCH` igual responde `200` y lo avisa.

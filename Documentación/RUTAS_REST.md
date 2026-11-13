@@ -23,8 +23,8 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 
 1. **Recursos con sustantivos en plural:** `/snippets`, `/users`, `/tests`, `/rules`, `/permissions`,
    `/executions`. Las acciones se modelan como recursos que se crean: correr un test es crear una
-   *corrida* (`POST .../tests/{id}/runs`) y pedir un linteo es crear un *trabajo de linteo*
-   (`POST .../lint-jobs`).
+   *corrida* (`POST .../tests/{id}/runs`) y ejecutar un snippet es crear una *ejecución*
+   (`POST .../executions`).
 2. **Una sola ruta por operación.** No hay alias (`/permission` y `/permissions`, `/run` y `/executions`):
    dos formas de hacer lo mismo duplican la superficie de la API y confunden a quien la consume.
 3. **Verbos HTTP con su semántica:**
@@ -65,12 +65,10 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 | :--- | :--- | :--- | :---: |
 | `GET` | `/api/v1/snippets` | Snippets del usuario (propios y compartidos). `compliance`: `pending` / `failed` / `compliant` / `not-compliant` (ver `USO_DE_REDIS.md`). | JWT |
 | `GET` | `/api/v1/snippets/{snippetId}` | Snippet consolidado: metadatos del App + contenido del bucket vía Runner (BFF). | Owner o shared |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Crea el snippet. El dueño es el usuario del token. Con `content`, el Runner valida y guarda el código (`201`, o `400` con el error de parseo). `409` si ya existe. | Logueado |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica descripción, versión o, con `content`, el código: el Runner lo valida, lo guarda, pide el linteo y corre los tests. | Owner |
+| `PUT` | `/api/v1/snippets/{snippetId}` | Crea el snippet. El dueño es el usuario del token. Con `content`, el Runner valida y guarda el código (`201`, o `400` con el error de parseo) y después App registra metadatos y dueño y encola el linteo. Si el registro falla, App borra el código guardado. `409` si ya existe. | Logueado |
+| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica descripción, versión o, con `content`, el código: el Runner lo valida y lo guarda, y App encola el linteo y corre los tests. | Owner |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el snippet, sus tests, sus permisos y su contenido en el bucket. | Owner |
-| `POST` | `/api/v1/snippets/{snippetId}/lint-jobs` | Crea un trabajo de linteo asíncrono con las reglas del dueño. `202 Accepted`. | Shared/Owner |
 
-\* Ver §11: estas dos rutas quedaron abiertas porque el Runner las llama sin JWT.
 
 ## 3. App: Permisos (`/api/v1/snippets/{snippetId}/permissions`)
 
@@ -119,14 +117,15 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 
 ## 8. Runner (solo red interna)
 
-El Runner no está expuesto a internet: **solo lo llama App**, por la red interna. Para registrar un snippet nuevo,
-el Runner llama a la ruta interna de App `PUT /internal/snippets/{snippetId}`, que tampoco está publicada.
+El Runner no está expuesto a internet: **solo lo llama App**, por la red interna. El Runner nunca llama a App:
+responde lo que le piden y nada más. Registrar el snippet, encolar el linteo y correr los tests después de guardar
+lo orquesta App.
 
 | Método | Endpoint | Descripción | Quién lo llama |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/v1/snippets/{snippetId}` | Contenido del snippet. | App |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Valida, guarda en el bucket y registra en App por `/internal/`. `201`, `400` (código inválido o ya existe), `502` (bucket). | App |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Actualiza el contenido, crea un `lint-job` en App y corre los tests. | App |
+| `PUT` | `/api/v1/snippets/{snippetId}` | Valida y guarda en el bucket (body: `name`, `language`, `snippet`, `version`). `201`, `400` (código inválido o ya existe), `502` (bucket). | App |
+| `PATCH` | `/api/v1/snippets/{snippetId}` | Valida y reemplaza el contenido (body: `snippet`, `version`). `200`, `400`, `502`. | App |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el contenido del bucket. `204` / `404` / `502`. | App |
 | `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}?userId=&language=&version=` | Formatear o lintear síncrono con las reglas de `userId`. En `lint`, un body de texto opcional reemplaza al código guardado. Antes llamaba al plugin sin reglas y siempre daba `500`. | App |
 | `POST` | `/api/v1/snippets/{snippetId}/executions` | Ejecuta (body con `userId`, `version`, `environment`, `inputs`). | App |
@@ -158,16 +157,16 @@ Runner y AccessManager no tienen ruta pública. Detalle en [SEGURIDAD.md](SEGURI
 | Antes | Problema | Ahora |
 | :--- | :--- | :--- |
 | `401` cuando el usuario **sí** estaba logueado pero no tenía permiso (15 casos en el App) | `401` significa "no sé quién sos". El cliente podría intentar volver a loguearse sin sentido. | `403 Forbidden`. `401` queda solo para requests sin token o con token inválido (lo hace Spring Security). |
-| Correr un test con `PUT /snippets/{id}/tests/{testId}` (además de `POST .../run` y `POST .../runs`) | `PUT` sobre un test debería **reemplazarlo**, no ejecutarlo. Tres rutas para lo mismo. | Solo `POST /snippets/{id}/tests/{testId}/runs`. El Runner (`AppClient.testAll`) también usa esta ruta. |
+| Correr un test con `PUT /snippets/{id}/tests/{testId}` (además de `POST .../run` y `POST .../runs`) | `PUT` sobre un test debería **reemplazarlo**, no ejecutarlo. Tres rutas para lo mismo. | Solo `POST /snippets/{id}/tests/{testId}/runs`. |
 | Alias `/permission` y `/permissions`, `POST` y `PUT` para compartir | Rutas duplicadas. Compartir crea un permiso: es `POST`. | Solo `/permissions`, y `POST` para compartir. |
 | Alias `/execution`, `/executions` y `/run`; también `/execution/status` y `/run/status` | Rutas duplicadas. | Solo `/executions`, `/executions/input` y `/executions/status`. |
 | `PUT /snippets/{id}/tasks/{task}` y su alias `/task/{task}` | No reemplaza ningún recurso: es una acción que devuelve un resultado. | `POST /snippets/{id}/tasks/{task}`, sin alias. En App y en Runner. |
-| `POST /snippets/{id}/lint` | Verbo en la URL. | `POST /snippets/{id}/lint-jobs`: crea un trabajo de linteo y devuelve `202`. |
+| `POST /snippets/{id}/lint` | Verbo en la URL. | Pasó a `POST /snippets/{id}/lint-jobs`, que solo usaba el Runner. Desde que App orquesta el guardado (noviembre 2026), App encola el linteo directamente y la ruta se borró. |
 | `DELETE .../executions` con body `{userId}` (App y Runner) | Muchos proxies y clientes descartan el body de un DELETE. Además en el App el usuario ya viene en el JWT. | App: sin body, usa el JWT. Runner: `?userId=` como query param (igual que `/status`). Se borraron los DTOs `CancelExecutionRequest` y `SnippetExecutionRunerCancel`. |
 | `POST` y `PUT /users` | Dos verbos para lo mismo. | Solo `PUT`: es idempotente y se llama en cada login. |
 | Registrar un snippet existente: `400`, o peor, lo **pisaba** | `save()` de JPA sobre un id existente hace *merge* y sobreescribía nombre y metadatos. | Se chequea antes: `409 Conflict` sin tocar nada. |
 | `PATCH /snippets/{id}/status` público y `POST /testing` público | Cualquiera podía marcar un snippet como compliant o meter mensajes en el stream. | Eliminados (ver `USO_DE_REDIS.md`). |
-| `GET` y `PUT /api/v1/snippets/{id}` del App públicos; Runner y AccessManager publicados en `/runner/` y `/access/` sin autenticación | Cualquiera podía leer, crear o borrar snippets ajenos y cambiar permisos. | La UI pasa todo por App, que valida token y permiso. Runner y AccessManager quedan en la red interna. El registro desde el Runner usa `PUT /internal/snippets/{id}`. Ver `SEGURIDAD.md`. |
+| `GET` y `PUT /api/v1/snippets/{id}` del App públicos; Runner y AccessManager publicados en `/runner/` y `/access/` sin autenticación | Cualquiera podía leer, crear o borrar snippets ajenos y cambiar permisos. | La UI pasa todo por App, que valida token y permiso. Runner y AccessManager quedan en la red interna, y ninguno llama a App. Ver `SEGURIDAD.md`. |
 | Rutas `/{container}/{snippetId}` en el Runner | Exponían el container del bucket. | Eliminadas (ver `USO_DE_BUCKETS.md`). |
 
 **Impacto en la UI:** ninguno. `printscript-ui` (rama `develop`) ya usaba solo las rutas canónicas. El DELETE de
@@ -196,7 +195,7 @@ Tests nuevos en el App que fijan estas reglas:
 1. **¿401 o 403?** `401`: no hay token o es inválido. `403`: el usuario está identificado pero no puede hacer eso.
 2. **¿Por qué correr un test es `POST .../runs` y no `PUT .../tests/{id}`?** `PUT` reemplaza el recurso que está en
    esa ruta. Correr un test no reemplaza el test: crea una corrida nueva con su resultado.
-3. **¿Por qué `202` en `lint-jobs` y en `PUT /rules`?** Porque el trabajo se aceptó pero todavía no terminó: se
+3. **¿Por qué `202` en `PUT /rules` con `applyToSnippets`?** Porque el trabajo se aceptó pero todavía no terminó: se
    procesa en segundo plano y el resultado llega después (`pending` → `compliant` / `not-compliant`).
 4. **¿Por qué un `DELETE` no lleva body?** La especificación HTTP no le da semántica y muchos proxies y clientes lo
    descartan. Lo que haga falta va en la ruta o en un query param.

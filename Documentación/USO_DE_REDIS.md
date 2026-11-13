@@ -296,12 +296,13 @@ el contenido cambió y el compliance anterior ya no vale. El linteo se encola re
 del formateo, no al mismo tiempo, para que lea el código ya formateado (ver §5.1).
 
 ### 7.3 Crear un snippet
-`UI → Runner PUT` (valida y guarda en el bucket) `→ App PUT /api/v1/snippets/{id}` (metadatos, permiso de
-dueño) `→ App encola lint`. La UI lo ve `pending` y, a los segundos, `compliant` o `not-compliant`.
+`UI → App PUT /api/v1/snippets/{id}` `→ Runner` (valida y guarda en el bucket) y, con la respuesta, App guarda los
+metadatos y el permiso de dueño y encola el lint. La UI lo ve `pending` y, a los segundos, `compliant` o `not-compliant`.
 
 ### 7.4 Editar el contenido
-`UI → Runner PATCH` (guarda en el bucket) `→ App POST /api/v1/snippets/{id}/lint-jobs` con el JWT del usuario.
-El App verifica el permiso, busca al **dueño** (sus reglas son las que valen) y encola.
+`UI → App PATCH /api/v1/snippets/{id}` `→ Runner` (valida y guarda en el bucket). Con la respuesta, App pone
+`compliant = null` (el resultado anterior ya no vale), busca al **dueño** (sus reglas son las que valen) y encola.
+Si encolar falla, el snippet queda `pending` por `compliant = null` y lo retoma el reconciliador (7.5).
 
 ### 7.5 Reconciliador (`jobs/PendingLintReconciler.kt`)
 Cada 5 minutos (empieza 2 minutos después de arrancar) busca los snippets con `compliant = null` y los encola.

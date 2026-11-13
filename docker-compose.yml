@@ -90,8 +90,6 @@ services:
       BUCKET_PORT: 8080
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      APP_HOST: snippetsearcher-app
-      APP_PORT: 8080
     depends_on:
       - runner-db
       - asset-service
