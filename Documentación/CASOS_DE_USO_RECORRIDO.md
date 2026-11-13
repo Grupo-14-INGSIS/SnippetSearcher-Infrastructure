@@ -23,7 +23,7 @@ consulta HTTP al **AccessManager**, que lee **accessmanager-db**.
 ---
 
 ## US #1: Crear un snippet mediante archivo
-1. La UI lee el archivo y manda `PUT /api/v1/snippets/{id}` (Nginx → **App**) con nombre, lenguaje y código. El App toma al dueño del token y le pasa el código al **Runner** por la red interna.
+1. La UI lee el archivo y manda `PUT /api/v1/snippets/{id}` (Nginx → **App**) con nombre, descripción, lenguaje, versión y código. El App toma al dueño del token y le pasa el código al **Runner** por la red interna.
 2. El **Runner** valida el código con el parser. Si es inválido, responde `400` con la regla, la línea y la columna, y no sigue.
 3. El Runner guarda el código en el **bucket** (`{id}` y `{id}_original`) y le responde a App. Si el bucket falla, responde `502` y App no registra nada.
 4. Con la respuesta del Runner, el **App** guarda los metadatos en **appdb**, le da el permiso `owner` al creador en el **AccessManager** y encola el primer linteo en **Redis** (marca `pending` y hace `XADD` en `snippet-jobs`). Si algo de esto falla, App borra el código que el Runner acababa de guardar, para que no quede huérfano.
@@ -36,14 +36,14 @@ El Runner nunca llama a App: solo responde lo que App le pide.
 2. El **Runner** valida con el parser (`400` con regla, línea y columna si es inválido) y guarda en el **bucket** (`{id}` y `{id}_original`). Responde y termina ahí.
 3. El **App** pone `compliant = null` en **appdb** (el resultado anterior ya no vale), busca al dueño en el **AccessManager** y encola el linteo en **Redis**. Si encolar falla, el snippet queda *Pending* y lo retoma el reconciliador.
 4. El App corre los tests del snippet (ver US #16).
-5. Para el resto de los datos (descripción, versión), la UI llama a `PATCH /api/v1/snippets/{id}` en el **App**: chequea que sea `owner` y actualiza **appdb**.
+5. Para el resto de los datos (nombre, descripción, lenguaje, versión), el botón **Editar** del detalle llama a `PATCH /api/v1/snippets/{id}` en el **App** con los campos que cambiaron: chequea que sea `owner`, valida (nombre no vacío, lenguaje y versión soportados) y actualiza **appdb**. Si cambió el lenguaje o la versión, el mismo código puede parsear distinto: pone `compliant = null` y encola el linteo. Si en el mismo PATCH viene código y el Runner lo rechaza, no se guarda ningún cambio.
 
 ## US #3: Crear un snippet en el editor
 Mismo recorrido que la **US #1**. La única diferencia está en la UI: el código sale del editor embebido en lugar de un archivo.
 
 ## US #4: Actualizar un snippet en el editor
 Mismo recorrido que la **US #2**: App → Runner (parser y bucket) → App encola el linteo en Redis y corre los tests.
-Antes de guardar, el botón **Lint** del editor llama a `POST /api/v1/snippets/{id}/tasks/lint` (App → Runner, con las reglas del dueño en **runner-db**) para probar el código sin guardar nada.
+Antes de guardar, los botones **Lint** y **Format** del editor llaman a `POST /api/v1/snippets/{id}/tasks/lint` y `.../tasks/format` con el código del editor (App → Runner, con el linter y el formatter de PrintScript y las reglas del dueño en **runner-db**) para probarlo sin guardar nada. El formateo se ve en el editor y se guarda con **Save changes**.
 
 ## US #5: Ver todos los snippets
 1. La UI llama a `GET /api/v1/snippets` (→ **App**).
@@ -55,7 +55,7 @@ Antes de guardar, el botón **Lint** del editor llama a `POST /api/v1/snippets/{
 ## US #6: Ver un snippet
 1. La UI llama a `GET /api/v1/snippets/{id}` (→ **App**).
 2. El App lee los metadatos en **appdb**, le pide el contenido al **Runner** (que lo lee del **bucket**) y el estado de linteo a **Redis** (patrón BFF).
-3. Responde todo junto. Si no vino el contenido, la UI se lo pide directo al Runner como respaldo.
+3. Responde todo junto: nombre, descripción, lenguaje, versión, estado de linteo y código. La UI los muestra arriba del editor.
 4. Para mostrar los tests: `GET /api/v1/snippets/{id}/tests` → el App chequea `shared` u `owner` en el **AccessManager** y lee los tests de **appdb**. Para ejecutarlos, ver US #9.
 
 ## US #7: Compartir un snippet

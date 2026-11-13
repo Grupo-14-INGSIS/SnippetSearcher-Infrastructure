@@ -65,8 +65,8 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 | :--- | :--- | :--- | :---: |
 | `GET` | `/api/v1/snippets` | Snippets del usuario (propios y compartidos). `compliance`: `pending` / `failed` / `compliant` / `not-compliant` (ver `USO_DE_REDIS.md`). | JWT |
 | `GET` | `/api/v1/snippets/{snippetId}` | Snippet consolidado: metadatos del App + contenido del bucket vía Runner (BFF). | Owner o shared |
-| `PUT` | `/api/v1/snippets/{snippetId}` | Crea el snippet. El dueño es el usuario del token. Con `content`, el Runner valida y guarda el código (`201`, o `400` con el error de parseo) y después App registra metadatos y dueño y encola el linteo. Si el registro falla, App borra el código guardado. `409` si ya existe. | Logueado |
-| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica descripción, versión o, con `content`, el código: el Runner lo valida y lo guarda, y App encola el linteo y corre los tests. | Owner |
+| `PUT` | `/api/v1/snippets/{snippetId}` | Crea el snippet (body: `name`, `language`, `description`, `version`, `content`). El dueño es el usuario del token. Con `content`, el Runner valida y guarda el código (`201`, o `400` con el error de parseo) y después App registra metadatos y dueño y encola el linteo. Si el registro falla, App borra el código guardado. `409` si ya existe. | Logueado |
+| `PATCH` | `/api/v1/snippets/{snippetId}` | Modifica nombre, descripción, lenguaje, versión o, con `content`, el código: el Runner lo valida y lo guarda, y App encola el linteo y corre los tests. Cambiar lenguaje o versión también re-lintea. `400` con nombre vacío o lenguaje/versión no soportados. Si el Runner rechaza el código, no se guarda ningún cambio. | Owner |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el snippet, sus tests, sus permisos y su contenido en el bucket. | Owner |
 
 
@@ -96,7 +96,7 @@ requiere. También explica la convención que se sigue y qué se cambió para cu
 | `GET` | `/api/v1/snippets/{snippetId}/executions/status?kind=run\|test` | Estado y output impreso **hasta ahora** de la ejecución (`run`, por defecto) o de la corrida de un test (`test`). La UI lo consulta mientras corre para mostrar el output en vivo (US #9 y #10). | Shared/Owner |
 | `GET` | `/api/v1/snippets/{snippetId}/download?variant=original\|formatted` | US #13: descarga `.ps` (adjunto). `original` = como lo escribió el usuario; `formatted` = formateado en el momento con las reglas del dueño. | Shared/Owner |
 | `DELETE` | `/api/v1/snippets/{snippetId}/executions` | Cancela la ejecución del usuario. Sin body. `200`. | Shared/Owner |
-| `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}` | Aplica `format` o `lint` de forma **síncrona** con las reglas del owner y devuelve el resultado. `lint` acepta un body opcional `{content}` con el código del editor (lo usa el botón Lint de la UI) y no guarda nada. `format` guarda el código nuevo y vuelve a encolar el linteo. `400` si no hay reglas o el código no parsea. | `lint`: Shared · `format`: Owner |
+| `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}` | Aplica `format` o `lint` de forma **síncrona** con las reglas del owner y devuelve el resultado. Con body `{content}` (el código del editor, lo usan los botones Lint y Format de la UI) es una vista previa y no guarda nada. `format` sin body guarda el código nuevo y vuelve a encolar el linteo. `400` si no hay reglas o el código no parsea. | `lint` y vista previa: Shared · `format` sin body: Owner |
 
 ## 6. App: Reglas (`/api/v1/rules`)
 
@@ -127,7 +127,8 @@ lo orquesta App.
 | `PUT` | `/api/v1/snippets/{snippetId}` | Valida y guarda en el bucket (body: `name`, `language`, `snippet`, `version`). `201`, `400` (código inválido o ya existe), `502` (bucket). | App |
 | `PATCH` | `/api/v1/snippets/{snippetId}` | Valida y reemplaza el contenido (body: `snippet`, `version`). `200`, `400`, `502`. | App |
 | `DELETE` | `/api/v1/snippets/{snippetId}` | Borra el contenido del bucket. `204` / `404` / `502`. | App |
-| `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}?userId=&language=&version=` | Formatear o lintear síncrono con las reglas de `userId`. En `lint`, un body de texto opcional reemplaza al código guardado. Antes llamaba al plugin sin reglas y siempre daba `500`. | App |
+| `POST` | `/api/v1/snippets/{snippetId}/tasks/{task}?userId=&language=&version=` | Formatear o lintear síncrono con las reglas de `userId`. Un body de texto opcional reemplaza al código guardado y no se guarda nada (vista previa). Sin body, `format` guarda el resultado. Antes llamaba al plugin sin reglas y siempre daba `500`. | App |
+| `GET` | `/api/v1/version` | Versión de las librerías de PrintScript (`{"printscript":"2.0.12"}`). App la usa para detectar un parser nuevo y re-evaluar todos los snippets. | App |
 | `POST` | `/api/v1/snippets/{snippetId}/executions` | Ejecuta (body con `userId`, `version`, `environment`, `inputs`). | App |
 | `POST` | `/api/v1/snippets/{snippetId}/executions/input` | Envía un input. | App |
 | `GET` | `/api/v1/snippets/{snippetId}/executions/status?userId=&kind=run\|test` | Estado y output hasta ahora (se lee de Redis: responde cualquier réplica). | App |

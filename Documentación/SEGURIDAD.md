@@ -52,11 +52,11 @@ usuarios con quienes se compartió (`shared`). App lo consulta antes de cada acc
 | Ver la lista de sus snippets | Cualquier usuario logueado (ve solo los suyos y los compartidos) | `GET /api/v1/snippets` |
 | Leer un snippet (metadatos y código) | Dueño o compartido | `GET /api/v1/snippets/{id}` |
 | Crear un snippet | Cualquier usuario logueado. **El dueño es siempre el usuario del token**: el `userId` del body se ignora | `PUT /api/v1/snippets/{id}` |
-| Editar el código, la descripción o la versión | Solo el dueño | `PATCH /api/v1/snippets/{id}` |
+| Editar el código, el nombre, la descripción, el lenguaje o la versión | Solo el dueño | `PATCH /api/v1/snippets/{id}` |
 | Borrar | Solo el dueño | `DELETE /api/v1/snippets/{id}` |
 | Compartir o quitar acceso | Solo el dueño | `POST` / `DELETE .../permissions` |
-| Ejecutar, lintear, ver tests, descargar | Dueño o compartido | `.../executions`, `.../tasks/lint`, `.../tests`, `.../download` |
-| Formatear (guarda el resultado) | Solo el dueño | `.../tasks/format` |
+| Ejecutar, lintear, ver tests, descargar, vista previa del formateo (no guarda) | Dueño o compartido | `.../executions`, `.../tasks/lint`, `.../tasks/format` con `{content}`, `.../tests`, `.../download` |
+| Formatear y guardar el resultado | Solo el dueño | `.../tasks/format` sin body |
 
 **Scopes:** no se usan. La API tiene un único cliente propio (la UI), y lo que importa es el permiso sobre cada
 snippet, que un scope no puede expresar. Para sumarlos, ver la [sección 8](#8-pendientes).

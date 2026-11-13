@@ -178,7 +178,17 @@ Lo que importa es **qué cambia cada operación**:
 | Cambiar reglas de **linteo** | No | Puede cambiar: mismo código, otras reglas | Solo `lint` |
 | Cambiar reglas de **formateo** | **Sí**: el Runner reescribe el bucket | Puede cambiar: código nuevo | `format`, y **cuando termina**, `lint` |
 | Editar el contenido (PATCH) | Sí | Puede cambiar | `lint` |
-| Botón formatear (`POST /tasks/format`) | Sí | Puede cambiar | `lint` |
+| `POST /tasks/format` sin body (guarda) | Sí | Puede cambiar | `lint` |
+| Botón Format de la UI (`POST /tasks/format` con el código del editor) | No: es una vista previa | No | Nada (se encola al guardar) |
+| Editar lenguaje o versión (PATCH) | No | Puede cambiar: el mismo código puede parsear distinto | `lint` |
+| **Versión nueva del parser** de PrintScript en el Runner | No | Puede cambiar | `lint` de **todos** los snippets (ver abajo) |
+
+**Versión nueva del parser.** La consigna pide re-evaluar y validar todos los snippets con cada versión nueva
+del parser. El Runner expone `GET /api/v1/version` con la versión de las librerías de PrintScript (la completa
+Gradle al compilar). En cada pasada del reconciliador (cada 5 minutos), App la compara con la última vista,
+guardada en Redis en la clave `printscript:parser-version` con `GETSET` (con varias réplicas, solo una ve el
+cambio). Si cambió, pone `compliant = null` en todos los snippets y borra los `failed` del hash; en esa misma
+pasada el reconciliador los encola con las reglas de cada dueño. La primera vez solo se guarda la versión.
 
 ```
 reglas de formateo ──▶ cambia el código ──▶ hay que volver a lintear
