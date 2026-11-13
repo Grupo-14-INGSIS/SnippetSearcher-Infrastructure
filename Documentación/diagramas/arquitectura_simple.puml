@@ -41,8 +41,7 @@ nginx --> app : /api
 app ..> auth0 : valida tokens
 
 app --> am : ¿puede?
-app --> runner : código, ejecuciones,\ntests, reglas
-runner --> app : registra snippets,\npide linteos y tests
+app --> runner : guardar código, ejecutar,\ntests, reglas
 
 app --> redis
 redis --> runner : trabajos

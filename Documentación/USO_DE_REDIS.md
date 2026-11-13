@@ -69,7 +69,6 @@ La presentación compara varios enfoques. Cada uno arregla algo del anterior:
 | `snippet-jobs` | Stream | App (productor) | Runner, grupo `runner_group` | Trabajos: "linteá / formateá el snippet X" |
 | `snippet-job-results` | Stream | Runner (productor) | App, grupo `app_group` | Resultados: "X dio compliant / not-compliant / formatted / failed" |
 | `snippet:lint-status` | Hash | App | App | `snippetId → "pending" \| "failed"` |
-| `snippet:{id}:{version}` | String | Runner | nadie (ver §12) | Última salida de ejecución |
 | `execution:{run\|test}:{userId}:{snippetId}:status` | String (TTL 10 min) | Runner | Runner (`/executions/status`) | `RUNNING` · `WAITING` · `COMPLETED` · `ERROR` |
 | `execution:{run\|test}:{userId}:{snippetId}:output` | List (TTL 10 min) | Runner | Runner (`/executions/status`) | Líneas impresas hasta ahora, en orden |
 
@@ -179,7 +178,17 @@ Lo que importa es **qué cambia cada operación**:
 | Cambiar reglas de **linteo** | No | Puede cambiar: mismo código, otras reglas | Solo `lint` |
 | Cambiar reglas de **formateo** | **Sí**: el Runner reescribe el bucket | Puede cambiar: código nuevo | `format`, y **cuando termina**, `lint` |
 | Editar el contenido (PATCH) | Sí | Puede cambiar | `lint` |
-| Botón formatear (`POST /tasks/format`) | Sí | Puede cambiar | `lint` |
+| `POST /tasks/format` sin body (guarda) | Sí | Puede cambiar | `lint` |
+| Botón Format de la UI (`POST /tasks/format` con el código del editor) | No: es una vista previa | No | Nada (se encola al guardar) |
+| Editar lenguaje o versión (PATCH) | No | Puede cambiar: el mismo código puede parsear distinto | `lint` |
+| **Versión nueva del parser** de PrintScript en el Runner | No | Puede cambiar | `lint` de **todos** los snippets (ver abajo) |
+
+**Versión nueva del parser.** La consigna pide re-evaluar y validar todos los snippets con cada versión nueva
+del parser. El Runner expone `GET /api/v1/version` con la versión de las librerías de PrintScript (la completa
+Gradle al compilar). En cada pasada del reconciliador (cada 5 minutos), App la compara con la última vista,
+guardada en Redis en la clave `printscript:parser-version` con `GETSET` (con varias réplicas, solo una ve el
+cambio). Si cambió, pone `compliant = null` en todos los snippets y borra los `failed` del hash; en esa misma
+pasada el reconciliador los encola con las reglas de cada dueño. La primera vez solo se guarda la versión.
 
 ```
 reglas de formateo ──▶ cambia el código ──▶ hay que volver a lintear
@@ -297,12 +306,13 @@ el contenido cambió y el compliance anterior ya no vale. El linteo se encola re
 del formateo, no al mismo tiempo, para que lea el código ya formateado (ver §5.1).
 
 ### 7.3 Crear un snippet
-`UI → Runner PUT` (valida y guarda en el bucket) `→ App PUT /api/v1/snippets/{id}` (metadatos, permiso de
-dueño) `→ App encola lint`. La UI lo ve `pending` y, a los segundos, `compliant` o `not-compliant`.
+`UI → App PUT /api/v1/snippets/{id}` `→ Runner` (valida y guarda en el bucket) y, con la respuesta, App guarda los
+metadatos y el permiso de dueño y encola el lint. La UI lo ve `pending` y, a los segundos, `compliant` o `not-compliant`.
 
 ### 7.4 Editar el contenido
-`UI → Runner PATCH` (guarda en el bucket) `→ App POST /api/v1/snippets/{id}/lint-jobs` con el JWT del usuario.
-El App verifica el permiso, busca al **dueño** (sus reglas son las que valen) y encola.
+`UI → App PATCH /api/v1/snippets/{id}` `→ Runner` (valida y guarda en el bucket). Con la respuesta, App pone
+`compliant = null` (el resultado anterior ya no vale), busca al **dueño** (sus reglas son las que valen) y encola.
+Si encolar falla, el snippet queda `pending` por `compliant = null` y lo retoma el reconciliador (7.5).
 
 ### 7.5 Reconciliador (`jobs/PendingLintReconciler.kt`)
 Cada 5 minutos (empieza 2 minutos después de arrancar) busca los snippets con `compliant = null` y los encola.
@@ -445,8 +455,10 @@ HGETALL snippet:lint-status                        # qué snippets están pendin
 
 ## 12. Limitaciones conocidas
 
-- **Cache de ejecución que nadie lee:** `ExecutionService` guarda la salida de cada ejecución en
-  `snippet:{id}:{version}` (sin TTL) y nunca la lee. Habría que borrarlo o ponerle TTL.
+- **Cache de ejecución:** ✅ resuelto. `ExecutionService` guardaba la salida de cada ejecución en
+  `snippet:{id}:{version}`, sin TTL y sin leerla nunca. Se borró (13/11/2026). Las claves que ya existan en Redis
+  quedan huérfanas: se pueden borrar con `redis-cli --scan --pattern 'snippet:*:*' | xargs redis-cli del`, cuidando
+  de no tocar `snippet:lint-status`.
 - **Esquema duplicado:** `SnippetJobMessages.kt` y la base de streams están copiados en App y Runner. Si se
   cambia un campo hay que cambiarlo en los dos. Una librería compartida, como hace la cátedra, lo evitaría.
 - **Salida del analizador por `System.out`:** el lock evita mezclar dos análisis, pero un log de otro hilo

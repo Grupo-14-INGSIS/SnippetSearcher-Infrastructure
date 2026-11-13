@@ -5,7 +5,7 @@
 - [2. Ramas, ambientes y tags](#2-ramas-ambientes-y-tags)
 - [3. CI/CD de cada microservicio](#3-cicd-de-cada-microservicio)
 - [4. Escritura de la versión en Infra](#4-escritura-de-la-versión-en-infra)
-- [5. update_service.yml: sin uso](#5-update_serviceyml-sin-uso)
+- [5. update_service.yml: eliminado](#5-update_serviceyml-eliminado)
 - [6. deploy.yml: desplegar el stack](#6-deployyml-desplegar-el-stack)
 - [7. Secrets, variables y environments](#7-secrets-variables-y-environments)
 - [8. Qué pasa en la VM: Swarm](#8-qué-pasa-en-la-vm-swarm)
@@ -199,11 +199,11 @@ vuelve a escribir su versión, así que el código con problemas también hay qu
 
 ---
 
-## 5. `update_service.yml`: sin uso
+## 5. `update_service.yml`: eliminado
 
-Es el workflow del esquema anterior: recibía un `repository_dispatch` de tipo `new-image-ready` y actualizaba un
-solo servicio. **Ningún microservicio lo dispara desde noviembre de 2026**, porque todos pasaron a `update-infra`.
-Sigue en el repo, pero no interviene en ningún deploy.
+Era el workflow del esquema anterior: recibía un `repository_dispatch` de tipo `new-image-ready` y actualizaba un
+solo servicio por SSH. Ningún microservicio lo disparaba desde noviembre de 2026, porque todos pasaron a
+`update-infra`, así que **se borró del repo** (13/11/2026). El único deploy es `deploy.yml`.
 
 ---
 
@@ -382,7 +382,7 @@ repositorio y después en la organización.
 | `PAT` | Secret | Organización | Token personal: escribir en el repo de Infra y bajar las imágenes privadas de GHCR |
 | `VITE_AUTH0_DOMAIN`, `_CLIENT_ID`, `_AUDIENCE`, `_REALM`, `VITE_BACKEND_URL` | Secret | Repo de la UI | Configuración de Auth0 y del backend que queda dentro del bundle. No son secretos reales: el navegador los ve |
 | `GITHUB_TOKEN` | Automático | Lo crea GitHub en cada run | Publicar la imagen en GHCR y bajar los paquetes de PrintScript |
-| `GHCR_USER` | Secret | Organización | Sin uso: solo lo lee `update_service.yml`, del esquema anterior |
+| `GHCR_USER` | Secret | Organización | Sin uso: lo leía `update_service.yml`, que se borró. Se puede eliminar de la organización |
 
 `SSH_HOST` y `SSH_DIRECTORY` a nivel repositorio de Infra también son de una configuración vieja: no los usa ningún
 workflow actual.
@@ -480,7 +480,7 @@ La VM es un nodo de Docker Swarm (manager). El stack `snippetsearcher` define se
 ## 10. Problemas conocidos
 
 - **Cypress no corre en CI** (la UI no tiene script `test`): los e2e solo corren a mano.
-- **`update_service.yml` sigue en el repo** aunque nadie lo dispara, y `GHCR_USER` solo lo usa ese workflow.
+- **El secret `GHCR_USER` sigue cargado en la organización** aunque ningún workflow lo usa: se puede borrar.
 - **Contraseñas en texto plano** en `docker-stack.yml`, y el repo es público. Ver la parte opcional de VM_LIMPIA.
 
 ---

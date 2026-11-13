@@ -52,11 +52,11 @@ usuarios con quienes se compartió (`shared`). App lo consulta antes de cada acc
 | Ver la lista de sus snippets | Cualquier usuario logueado (ve solo los suyos y los compartidos) | `GET /api/v1/snippets` |
 | Leer un snippet (metadatos y código) | Dueño o compartido | `GET /api/v1/snippets/{id}` |
 | Crear un snippet | Cualquier usuario logueado. **El dueño es siempre el usuario del token**: el `userId` del body se ignora | `PUT /api/v1/snippets/{id}` |
-| Editar el código, la descripción o la versión | Solo el dueño | `PATCH /api/v1/snippets/{id}` |
+| Editar el código, el nombre, la descripción, el lenguaje o la versión | Solo el dueño | `PATCH /api/v1/snippets/{id}` |
 | Borrar | Solo el dueño | `DELETE /api/v1/snippets/{id}` |
 | Compartir o quitar acceso | Solo el dueño | `POST` / `DELETE .../permissions` |
-| Ejecutar, lintear, ver tests, descargar | Dueño o compartido | `.../executions`, `.../tasks/lint`, `.../tests`, `.../download` |
-| Formatear (guarda el resultado) | Solo el dueño | `.../tasks/format` |
+| Ejecutar, lintear, ver tests, descargar, vista previa del formateo (no guarda) | Dueño o compartido | `.../executions`, `.../tasks/lint`, `.../tasks/format` con `{content}`, `.../tests`, `.../download` |
+| Formatear y guardar el resultado | Solo el dueño | `.../tasks/format` sin body |
 
 **Scopes:** no se usan. La API tiene un único cliente propio (la UI), y lo que importa es el permiso sobre cada
 snippet, que un scope no puede expresar. Para sumarlos, ver la [sección 8](#8-pendientes).
@@ -77,17 +77,22 @@ Solo nginx tiene puertos públicos (80 y 443):
 sin autenticación: cualquiera podía leer, editar o borrar snippets ajenos o cambiar permisos. Ahora la UI hace todo
 a través de App, que valida el token y el permiso, y App le pide a Runner lo que corresponda por la red interna.
 
-**Llamadas entre servicios:** van por la red interna de Swarm, sin token. La única ruta de App para eso es
-`PUT /internal/snippets/{id}`, con la que Runner registra un snippet después de guardar su código. nginx no la
-publica (solo reenvía `/api/`). Todo lo que App no conoce responde `403`.
+**Llamadas entre servicios:** van por la red interna de Swarm, sin token, y **siempre en un sentido: App llama a
+Runner y a AccessManager, y ellos solo responden**. App no tiene rutas sin token para otros servicios: todo lo que
+no es `/api/` (con token) ni el health check responde `401` o `403`. El token del usuario tampoco viaja hacia adentro.
 
 ```
 Crear un snippet:
-UI ──PUT /api/v1/snippets/{id}──▶ App (dueño = token) ──PUT──▶ Runner (valida y guarda el código)
-                                                                  └─PUT /internal/snippets/{id}──▶ App (metadatos y permiso owner)
+UI ──PUT /api/v1/snippets/{id}──▶ App (dueño = token) ──PUT──▶ Runner (valida y guarda el código) ── responde
+                                  App: guarda metadatos, permiso owner (AccessManager) y encola el linteo
 Editar el código:
-UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──PATCH──▶ Runner (valida, guarda, pide linteo y tests con el token del usuario)
+UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──PATCH──▶ Runner (valida y guarda) ── responde
+                                    App: encola el linteo y corre los tests (una llamada al Runner por test)
 ```
+
+Hasta noviembre de 2026 el Runner llamaba de vuelta a App (`PUT /internal/snippets/{id}` sin token, y
+`POST .../lint-jobs` y los tests con el token del usuario). Esa dependencia circular se eliminó: ver
+[EXTRAS_NOVIEMBRE_2026.md](EXTRAS_NOVIEMBRE_2026.md), sección 12.
 
 ---
 
@@ -125,7 +130,7 @@ curl -s -o /dev/null -w "%{http_code}\n" $DOM/api/v1/snippets
 curl -s $DOM/runner/api/v1/snippets/x | head -c 60
 curl -s $DOM/access/permissions | head -c 60
 
-# La ruta interna de App tampoco está publicada (solo /api/ llega a App)
+# Fuera de /api/ no llega nada a App: nginx manda el resto a la UI
 curl -s -o /dev/null -w "%{http_code}\n" -X PUT $DOM/internal/snippets/x
 
 # Health check público: {"status":"UP"}
@@ -135,8 +140,8 @@ curl -s $DOM/api/actuator/health
 Con dos usuarios: el usuario B pide `GET /api/v1/snippets/{id}` de un snippet de A que no le compartieron y recibe
 **`403`**. Después de compartirlo, recibe `200`.
 
-Los tests de App fijan estas reglas: `SecurityConfigTest`, `SnippetControllerTest` (lectura sin permiso, alta con el
-dueño del token, edición solo del dueño) e `InternalSnippetControllerTest`.
+Los tests de App fijan estas reglas: `SecurityConfigTest` (incluido que no quedan rutas internas sin token) y
+`SnippetControllerTest` (lectura sin permiso, alta con el dueño del token, edición solo del dueño).
 
 ---
 

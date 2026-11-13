@@ -76,7 +76,7 @@ access --> perms : Persiste permisos
    * El cliente web debía conocer dos URLs y puertos distintos (`:19081` para `App` y `:19082` para `Runner`).
    * Para visualizar un snippet, la UI debía orquestar dos peticiones en paralelo (`apiService.getSnippetData` y `runnerService.getSnippetContent`).
 2. **Dependencia Circular / Acoplamiento Bidireccional**:
-   * `App` llamaba a `Runner` para ejecutar snippets y correr tests, pero al crear un snippet, `Runner` llamaba de regreso a `App` (`appClient.registerSnippet`). Esto generaba ciclos indeseables entre microservicios.
+   * `App` llamaba a `Runner` para ejecutar snippets y correr tests, pero al crear un snippet, `Runner` llamaba de regreso a `App` (`appClient.registerSnippet`). Esto generaba ciclos indeseables entre microservicios. Resuelto del todo en noviembre de 2026 (ver sección 3, F).
 3. **El caso de testeo de snippets (Teléfono descompuesto de 4 saltos HTTP)**:
    * Al ejecutar un test, `App` consultaba el test en Postgres y se lo enviaba a `Runner` por HTTP; `Runner` tenía que hacer un salto HTTP a `AssetService` para bajarse el código del snippet; luego `Runner` ejecutaba, respondía a `App` y `App` respondía a la UI. Si se corrían 5 tests seguidos, el código se descargaba 5 veces por red.
 4. **El antipatrón de `jsonb` ("bjson") y `text[]`**:
@@ -222,7 +222,7 @@ asset --> azurite : Almacena blobs
 
 #### B. Redis: Streams de trabajos y estado del linteo
 * **Rol:** Redis es el **canal de mensajes** entre App y Runner (Redis Streams) y guarda el **estado de los trabajos de linteo en curso** (`pending` / `failed`).
-* **Streams:** `snippet-jobs` (App → Runner, consumer group `runner_group`) y `snippet-job-results` (Runner → App, consumer group `app_group`). El Runner ya no le avisa al App por HTTP síncrono.
+* **Streams:** `snippet-jobs` (App → Runner, consumer group `runner_group`) y `snippet-job-results` (Runner → App, consumer group `app_group`). Los resultados de linteo y formateo vuelven por Redis, no por HTTP. Las otras llamadas del Runner a App se eliminaron después (ver F).
 * **Tolerancia a fallos:** ACK manual (solo si el procesamiento terminó bien), recuperación periódica de mensajes sin confirmar con `XPENDING` + `XCLAIM`, y *dead letter* después de 3 entregas.
 * **Compliance:** La tabla `snippet` guarda el resultado definitivo (`compliant` boolean true/false). `pending` y `failed` viven en Redis y la API combina las dos fuentes.
 
@@ -249,8 +249,27 @@ asset --> azurite : Almacena blobs
 enteros y en orden), y `test` no tiene clave foránea a `snippet` (el borrado en cascada lo hace App).
 
 #### E. Trazabilidad Unificada con New Relic
-* El header `X-Request-Id` se propaga en cascada a través de todos los clientes HTTP (`AppClient`, `RunnerClient`, `AccessManagerClient`) y se asocia al MDC de logs.
+* El header `X-Request-Id` lo pone nginx (o la UI) y App lo propaga a sus clientes HTTP (`RunnerClient`, `AccessManagerClient`); cada servicio lo guarda en el MDC de sus logs.
 * En New Relic, cada petición genera un **Trace Map continuo y unificado** de extremo a extremo.
+
+#### F. Sin dependencia circular entre App y Runner (noviembre 2026)
+La dependencia circular de la arquitectura vieja (problema 2 de la sección 2) **se resolvió en dos etapas**:
+
+| Etapa | Qué se resolvió | Qué quedaba |
+| :--- | :--- | :--- |
+| Redis Streams | Los resultados de linteo y formateo vuelven por `snippet-job-results`, no por HTTP | El Runner seguía llamando a App por HTTP: registrar el snippet al crearlo (`registerSnippet`, justo el problema 2), pedir el linteo después de editar (`lint-jobs`) y correr los tests (`testAll`) |
+| App orquesta (13/11/2026) | El Runner ya no llama a App: solo valida, guarda, ejecuta, lintea y formatea lo que App le pide | Nada: las llamadas van en un solo sentido, UI → App → Runner |
+
+**Cómo es ahora:** al crear o editar, App le pide al Runner que valide y guarde el código. Con la respuesta, App
+registra los metadatos y el dueño, encola el linteo y corre los tests (una llamada al Runner por test).
+
+**Qué se ganó:**
+- **Consistencia:** si el registro falla, App borra el código recién guardado y no queda huérfano en el bucket. Al
+  editar, el estado de linteo anterior se invalida (`compliant = null`) y, si encolar falla, lo retoma el reconciliador.
+- **Seguridad:** desaparecieron la ruta sin token `/internal/snippets/{id}` y el reenvío del token del usuario al Runner.
+- **Menos carga:** App atiende un solo pedido por guardado, en lugar del pedido original más las llamadas de vuelta.
+
+Se borraron el `AppClient` del Runner, `InternalSnippetController` y el endpoint `POST .../lint-jobs` de App.
 
 ---
 

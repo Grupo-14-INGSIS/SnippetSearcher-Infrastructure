@@ -131,9 +131,10 @@ UI ──PUT /api/v1/snippets/{id}──▶ App (dueño = token) ──▶ Runne
    1. valida la sintaxis (ValidationPlugin)        → 400 si es inválido
    2. storage.exists(id)                           → 400 si ya existe
    3. storage.save(id, código)                     → 502 si el bucket no lo guardó (y NO sigue)
-   4. App: PUT /internal/snippets/{id}             → guarda metadatos + permiso owner
-                                                     + encola el primer linteo (Redis)
-   5. 201 Created con {id, name, content, language, version}
+   4. 201 Created con {id, name, content, language, version}
+App, con la respuesta del Runner:
+   5. guarda metadatos + permiso owner + encola el primer linteo (Redis)
+   6. si el paso 5 falla, borra el código del bucket (DELETE al Runner): no queda huérfano
 ```
 
 ### Editar el contenido
@@ -141,8 +142,9 @@ UI ──PUT /api/v1/snippets/{id}──▶ App (dueño = token) ──▶ Runne
 UI ──PATCH /api/v1/snippets/{id}──▶ App (solo dueño) ──▶ Runner
    1. valida la sintaxis
    2. storage.save(id, código nuevo)               → 502 si falla (upsert: sirve aunque no existiera)
-   3. App: POST /api/v1/snippets/{id}/lint-jobs (con el JWT del usuario) → "pending" + trabajo en Redis
-   4. App: corre los tests del snippet y devuelve el resumen
+App, con la respuesta del Runner:
+   3. compliant = null + "pending" + trabajo de linteo en Redis
+   4. corre los tests del snippet (una llamada al Runner por test) y devuelve el resumen
 ```
 
 ### Leer / ejecutar / testear

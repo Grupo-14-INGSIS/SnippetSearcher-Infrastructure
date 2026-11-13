@@ -14,6 +14,8 @@ link de la última columna.
 - [8. Qué queda por hacer](#8-qué-queda-por-hacer)
 - [9. Orden de deploy](#9-orden-de-deploy)
 - [10. Sin JSONB en las bases (9/11)](#10-sin-jsonb-en-las-bases-911)
+- [11. Limpieza de código muerto (13/11)](#11-limpieza-de-código-muerto-1311)
+- [12. Sin dependencia circular entre App y Runner (13/11)](#12-sin-dependencia-circular-entre-app-y-runner-1311)
 
 ---
 
@@ -49,6 +51,9 @@ UI ──/runner/─▶ Runner (crear con código,                         └�
 
 Los cambios de código están en App (`SecurityConfig`, `SnippetController`, `InternalSnippetController` nuevo,
 `RunnerClient`), Runner (`AppClient` usa `/internal`), y la UI (`api.ts` y `queries.tsx` van todo por App).
+
+> **Actualización (13/11):** la ruta `Runner ──/internal/──▶ App` del diagrama de arriba ya no existe. App pasó a
+> orquestar el guardado y el Runner no llama a App en ningún caso. Ver la [sección 12](#12-sin-dependencia-circular-entre-app-y-runner-1311).
 
 ## 2. Seguridad
 
@@ -175,3 +180,77 @@ Las dos tablas nuevas tienen clave foránea con `ON DELETE CASCADE`. Los inputs 
 
 Los comandos exactos están en [BASE_DE_DATOS.md](BASE_DE_DATOS.md), sección 8. Si se saltea el paso 1, el código
 nuevo arranca con las tablas vacías: los usuarios ven sus reglas vacías hasta que se corra `003`.
+
+---
+
+## 11. Limpieza de código muerto (13/11)
+
+Se revisaron los 5 repos buscando clases, funciones, archivos y configuración que nadie usa. Todo lo borrado se
+confirmó sin referencias, y después de borrar pasan lint, detekt, tests y la cobertura mínima (80 %) en cada servicio.
+No cambia el comportamiento visible.
+
+| Repo | Qué se borró | Por qué estaba muerto |
+| :--- | :--- | :--- |
+| App | 8 DTOs (`SnippetDownload`, `TaskRequest`, `ValidationRequest`, `ValidationResponse`, etc.) y el DTO `ExecutionEvent` (queda solo el enum `ExecutionEventType`) | Nadie los usaba |
+| App | `TestRepository.findTestIdsBySnippetId` | Consulta que nadie llamaba |
+| Runner | `SnippetCacheService` y su uso en `ExecutionService` | Guardaba cada salida de ejecución en Redis (`snippet:{id}:{version}`), sin TTL, y nadie la leía |
+| Runner | `MapJsonConverter` | Convertía los JSONB de las reglas; sin JSONB ya no se usa |
+| Runner | `TestPlugin` | Plugin de prueba que solo imprimía un cartel en consola |
+| Runner | `AppClient.sendLine`, `defaultHeaders` y su `logger`, y el DTO `ExecutionEvent` | `sendLine` estaba vacía (su código, comentado); el resto solo lo usaba ese código |
+| Runner | `ExecutionInputProvider.hasPendingInputs` | Nadie la llamaba |
+| UI | `runnerService.ts`, `FakeRunnerService` y `RUNNER_URL` | La UI ya no habla con el Runner: todo pasa por App |
+| UI | `authService.ts` y `authContext.tsx` | Login viejo con grant `password`; hoy se usa Auth0 |
+| UI | Hooks `useSendInput`, `useGetExecutionStatus`, `useRemoveTestCase`, y `sendInput` / `removeTestCase` de la API | Nadie los llamaba |
+| UI | `App.test.tsx`, `GetSnippetResponse`, `ExecutionRequest`, `ExecutionResponse`, `InputRequest`, `paginationParams`, `PaginatedUsers` | Archivo vacío y tipos sin uso |
+| UI, Infra | `VITE_RUNNER_URL` (Dockerfile, Cypress, `docker-stack.yml`, `docker-compose.yml`) y `APP_HOST` / `RUNNER_*` de la UI en `docker-compose.yml` | Ningún código las lee |
+| Infra | `.github/workflows/update_service.yml` | Workflow del esquema "dispatch": nadie lo dispara desde noviembre |
+
+Los tests que solo probaban código borrado se borraron con él.
+
+**No se borró, a propósito:**
+- El modo de prueba de la UI (`USE_MOCK_SERVICES` y `FakeSnippetOperations`): es una herramienta de desarrollo.
+- Los documentos viejos (los que tienen versión `_NEW`) y la carpeta `Deprecated`: son historia de la documentación.
+- `vm/snippetsearcher-lifecycle.*`: quedó como opcional (ver `VM_LIMPIA.md`).
+
+---
+
+## 12. Sin dependencia circular entre App y Runner (13/11)
+
+**Qué pasaba:** App llamaba al Runner, y el Runner llamaba de vuelta a App en tres casos:
+- al crear un snippet, para registrarlo (`PUT /internal/snippets/{id}`, sin token);
+- al editar el código, para pedir el linteo (`POST .../lint-jobs`, con el token del usuario);
+- al editar, para correr los tests (`testAll`: le pedía la lista a App y App volvía a llamar al Runner por cada test).
+
+La arquitectura vieja ya marcaba esta dependencia circular como problema, pero solo se había resuelto la parte de los
+resultados de linteo (que vuelven por Redis).
+
+**Problemas que causaba:**
+- Si App fallaba justo después de que el Runner guardaba el código nuevo, el código quedaba **huérfano** en el bucket.
+- Si fallaba el pedido de linteo al editar, el snippet seguía mostrando el estado **viejo** (por ejemplo, *Compliant*
+  con código que ya no cumplía).
+- Al guardar con tests, la cadena App → Runner → App → Runner sumaba tiempos y podía pasar el límite de 120 s.
+- App y Runner tenían que deployarse sí o sí juntos.
+
+**Ahora:** App orquesta y el Runner solo responde.
+
+```
+Crear:   UI → App → Runner (valida y guarda) → App registra metadatos y dueño, encola el linteo
+                                                (si falla, borra el código recién guardado)
+Editar:  UI → App → Runner (valida y guarda) → App invalida el linteo anterior, lo encola y corre los tests
+```
+
+| Repo | Cambio |
+| :--- | :--- |
+| App | `SnippetController`: el alta registra después de que el Runner guarda y deshace si falla; la edición pone `compliant = null`, encola el linteo y corre los tests. Se borraron `InternalSnippetController`, el endpoint `POST .../lint-jobs` y el permiso sin token para `/internal/**` |
+| Runner | `SnippetController` solo valida y guarda. Se borraron `AppClient`, los DTOs que solo usaba (`SnippetRegistrationRequest`, `SnippetCreationResponse`) y la URL de App de la configuración |
+| Infra | Sin `APP_HOST`/`APP_PORT` en el Runner (stack y compose); comentario de nginx actualizado |
+
+Para el usuario no cambia nada: los mismos botones, mensajes y resultados.
+
+**Tests:** App con 150 tests y 88,6 % de cobertura. Runner con 316 tests y 82,1 %. Hay tests nuevos para los casos de
+error: el registro falla y se borra el código; AccessManager falla y se deshace todo; fallan los tests después de
+guardar y el guardado se mantiene.
+
+**Deploy:** App y Runner tienen que salir **juntos**. Con App nuevo y Runner viejo, el Runner intentaría llamar a
+`/internal`, que ya no existe. Con App viejo y Runner nuevo, App esperaría que el Runner registre el snippet, y el
+Runner ya no lo hace. Push de los dos seguidos, y probar crear y editar un snippet cuando terminen los dos deploys.
