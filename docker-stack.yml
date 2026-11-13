@@ -58,7 +58,7 @@ services:
   # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
   # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
   snippetsearcher-app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-da8b58d0ea2abb63534ef8d311dc91e72f9f2bf5
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-e80acb4ffcaa8ec11c9b41422b83e163681c35e9
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
