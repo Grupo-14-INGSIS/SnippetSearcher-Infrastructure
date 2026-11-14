@@ -367,20 +367,34 @@ services:
         echo "[dns-watchdog] vigilando el DNS interno del stack $$STACK"
         while true; do
           sleep 30
-          # Un contenedor del stack con getent (postgres, redis y las imágenes de Java lo tienen)
+          # Un contenedor del stack con getent (postgres, redis y las imágenes de Java lo tienen). Se rota:
+          # cada vuelta empieza por uno distinto, así un contenedor con el DNS roto no se usa siempre.
           probe=""
-          for c in $$(docker ps -q --filter label=com.docker.stack.namespace=$$STACK); do
+          for c in $$(docker ps -q --filter label=com.docker.stack.namespace=$$STACK | shuf); do
             if docker exec "$$c" getent hosts localhost >/dev/null 2>&1; then probe=$$c; break; fi
           done
           [ -z "$$probe" ] && continue
+          # Primera pasada: qué servicios corriendo no resuelven
+          checked=0; broken=""
           for svc in $$(docker service ls --filter label=com.docker.stack.namespace=$$STACK --format '{{.Name}}'); do
             [ "$$svc" = "$$SELF" ] && continue
             [ -z "$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc)" ] && continue
+            checked=$$((checked + 1))
             name=$${svc#"$$STACK"_}
             if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
               rm -f "/tmp/fails/$$name"
-              continue
+            else
+              broken="$$broken $$svc"
             fi
+          done
+          # Si NINGUNO resuelve, el roto es el DNS del contenedor de prueba, no los servicios:
+          # no se cuenta la vuelta (si no, a los 2 minutos se recrearía el stack entero)
+          if [ "$$checked" -gt 1 ] && [ "$$(echo $$broken | wc -w)" -eq "$$checked" ]; then
+            echo "[dns-watchdog] ningún servicio resuelve desde $$probe: se prueba desde otro contenedor"
+            continue
+          fi
+          for svc in $$broken; do
+            name=$${svc#"$$STACK"_}
             n=$$(( $$(cat "/tmp/fails/$$name" 2>/dev/null || echo 0) + 1 ))
             echo "$$n" > "/tmp/fails/$$name"
             echo "[dns-watchdog] $$name corre pero no resuelve por nombre ($$n/4)"
