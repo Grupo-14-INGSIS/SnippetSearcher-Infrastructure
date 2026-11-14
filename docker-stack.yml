@@ -341,6 +341,68 @@ services:
         condition: any
         delay: 30s
 
+  # -------------------------------------------------------------
+  # Vigía del DNS interno de Swarm (sin nada instalado en la VM)
+  # -------------------------------------------------------------
+  # Después de un apagado de golpe, Swarm arranca con contenedores fantasma ("RW layer ... not found",
+  # "No such container") y a veces un servicio queda corriendo pero SIN nombre en el DNS interno: por
+  # ejemplo appdb 1/1, y App esperándola para siempre ("appdb: Name or service not known"). La
+  # reparación es recrear su tarea, que se vuelve a registrar: `docker service update --force`.
+  # Este servicio lo hace solo: cada 30 s prueba, desde un contenedor del stack, que cada servicio con
+  # tareas corriendo resuelva por nombre. Si uno no resuelve 4 vueltas seguidas (2 min), lo recrea.
+  # Un servicio que todavía no tiene tareas corriendo (arrancando) no se mira.
+  # Usa el socket de Docker (como el agente de New Relic): solo lee el estado y fuerza ese update.
+  # Es la parte "revisar el DNS" de vm/snippetsearcher-lifecycle.sh, pero desplegada con el stack.
+  dns-watchdog:
+    image: docker:27-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        STACK=snippetsearcher
+        SELF=$${STACK}_dns-watchdog
+        mkdir -p /tmp/fails
+        echo "[dns-watchdog] vigilando el DNS interno del stack $$STACK"
+        while true; do
+          sleep 30
+          # Un contenedor del stack con getent (postgres, redis y las imágenes de Java lo tienen)
+          probe=""
+          for c in $$(docker ps -q --filter label=com.docker.stack.namespace=$$STACK); do
+            if docker exec "$$c" getent hosts localhost >/dev/null 2>&1; then probe=$$c; break; fi
+          done
+          [ -z "$$probe" ] && continue
+          for svc in $$(docker service ls --filter label=com.docker.stack.namespace=$$STACK --format '{{.Name}}'); do
+            [ "$$svc" = "$$SELF" ] && continue
+            [ -z "$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc)" ] && continue
+            name=$${svc#"$$STACK"_}
+            if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
+              rm -f "/tmp/fails/$$name"
+              continue
+            fi
+            n=$$(( $$(cat "/tmp/fails/$$name" 2>/dev/null || echo 0) + 1 ))
+            echo "$$n" > "/tmp/fails/$$name"
+            echo "[dns-watchdog] $$name corre pero no resuelve por nombre ($$n/4)"
+            if [ "$$n" -ge 4 ]; then
+              echo "[dns-watchdog] recreando $$svc (docker service update --force)"
+              docker service update --force --detach "$$svc" >/dev/null
+              rm -f "/tmp/fails/$$name"
+            fi
+          done
+        done
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 64M
+
 # -------------------------------------------------------------
 # Volúmenes Persistentes
 # -------------------------------------------------------------

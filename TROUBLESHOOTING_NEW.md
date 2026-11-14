@@ -106,7 +106,17 @@ Este documento centraliza los problemas comunes, causas raíces y procedimientos
   ```bash
   docker service update --force snippetsearcher_appdb
   ```
-* **Prevención:** Asegurarse de tener instalado el servicio [`snippetsearcher-lifecycle`](file:///C:/Users/sergi/faculty/IngenieriaDeSistemas/SnippetSearcher-Infrastructure/vm/snippetsearcher-lifecycle.service) en la VM.
+* **Con la espera de la base del stack** (`x-wait-for-db`) el síntoma cambia: el servicio no tira la excepción, queda
+  en `[arranque] esperando a la base appdb:5432` sin escribir nada más y a los 15 minutos el healthcheck lo mata
+  (`exit 137`). Para confirmarlo: `docker exec <contenedor> getent hosts appdb` no devuelve nada.
+* **Causa de fondo:** casi siempre un apagado de la VM sin que Docker termine de cerrar. Al prender, `journalctl -u docker -b`
+  muestra `failed to load container mount ... RW layer ... not found` (contenedores fantasma) y Swarm, al reconciliarlos,
+  puede dejar un servicio sin registrar en el DNS.
+* **Reparación automática:** el servicio `dns-watchdog` del stack revisa cada 30 s que cada servicio corriendo resuelva por
+  nombre y, si uno no resuelve durante 2 minutos, le hace el `docker service update --force`. Sus avisos:
+  `docker service logs snippetsearcher_dns-watchdog`. No hay nada instalado en la VM.
+* **Prevención:** apagar la VM en orden: `sudo systemctl stop docker` antes del Stop de Azure. El script
+  `vm/snippetsearcher-lifecycle.sh` hace ese apagado ordenado, pero hay que instalarlo a mano en la VM (opcional).
 
 ### 3.4 Rollback en GitHub Actions: 'No such image' o digest mismatch
 * **Síntoma:** `deploy.yml` falla indicando que el servicio hizo rollback.
