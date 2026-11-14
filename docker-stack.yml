@@ -350,7 +350,8 @@ services:
   # reparación es recrear su tarea, que se vuelve a registrar: `docker service update --force`.
   # Este servicio lo hace solo: cada 30 s prueba, desde un contenedor del stack, que cada servicio con
   # tareas corriendo resuelva por nombre. Si uno no resuelve 4 vueltas seguidas (2 min), lo recrea.
-  # Un servicio que todavía no tiene tareas corriendo (arrancando) no se mira.
+  # Un servicio sin réplicas listas no se mira: ni sin tareas, ni con las de Java todavía en
+  # "health: starting" (Swarm las agrega al DNS recién cuando pasan a healthy).
   # Usa el socket de Docker (como el agente de New Relic): solo lee el estado y fuerza ese update.
   # Es la parte "revisar el DNS" de vm/snippetsearcher-lifecycle.sh, pero desplegada con el stack.
   dns-watchdog:
@@ -378,7 +379,13 @@ services:
           checked=0; broken=""
           for svc in $$(docker service ls --filter label=com.docker.stack.namespace=$$STACK --format '{{.Name}}'); do
             [ "$$svc" = "$$SELF" ] && continue
-            [ -z "$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc)" ] && continue
+            # Solo réplicas ya listas: healthy, o sin healthcheck (bases, redis...). Una réplica de Java
+            # en "health: starting" todavía no está en el DNS de Swarm (entra recién al pasar a healthy),
+            # y al prender la VM eso tarda varios minutos: si se la contara, el vigía la recrearía en
+            # pleno arranque, una y otra vez.
+            ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=healthy)
+            [ -z "$$ready" ] && ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=none)
+            [ -z "$$ready" ] && continue
             checked=$$((checked + 1))
             name=$${svc#"$$STACK"_}
             if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
