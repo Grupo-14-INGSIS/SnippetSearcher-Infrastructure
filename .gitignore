@@ -1,3 +1,6 @@
 secrets.json
 *.env
 app.conf
+
+# Configuración local del IDE
+.idea/
