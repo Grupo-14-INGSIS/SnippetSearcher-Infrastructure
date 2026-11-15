@@ -58,7 +58,7 @@ services:
   # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
   # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
   snippetsearcher-app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:production-913e028d555d71139c3838da609982cea68ac845
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-09f2f4955bdf79078f99a29a27332b582c384b40
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -119,7 +119,7 @@ services:
   # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
   # -------------------------------------------------------------
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:production-83ca63a65054eac818f0ebd401ef7d06b258fd0e
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-efca859d6310f24bdebc442287a2e92d386e17bb
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -182,7 +182,7 @@ services:
   # AccessManager (2 réplicas con balanceo de carga interno Swarm)
   # -------------------------------------------------------------
   snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:production-21c7ac09b46cde5eec1af2c13db80ac503be5c4f
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-5d21e174978d871419481903eb514a96b2f4218a
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
@@ -222,7 +222,7 @@ services:
   # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
   # -------------------------------------------------------------
   snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:production-ed2817923be42fcea11325ce7243639056949ed9
+    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop-d7dc89fe41b92b69368d90c9b0462959cf2d57e4
     # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
     # de localhost, llama a window.location.origin (/api): todo pasa por el reverse-proxy hacia App.
     environment:
@@ -350,7 +350,8 @@ services:
   # reparación es recrear su tarea, que se vuelve a registrar: `docker service update --force`.
   # Este servicio lo hace solo: cada 30 s prueba, desde un contenedor del stack, que cada servicio con
   # tareas corriendo resuelva por nombre. Si uno no resuelve 4 vueltas seguidas (2 min), lo recrea.
-  # Un servicio que todavía no tiene tareas corriendo (arrancando) no se mira.
+  # Un servicio sin réplicas listas no se mira: ni sin tareas, ni con las de Java todavía en
+  # "health: starting" (Swarm las agrega al DNS recién cuando pasan a healthy).
   # Usa el socket de Docker (como el agente de New Relic): solo lee el estado y fuerza ese update.
   # Es la parte "revisar el DNS" de vm/snippetsearcher-lifecycle.sh, pero desplegada con el stack.
   dns-watchdog:
@@ -378,7 +379,13 @@ services:
           checked=0; broken=""
           for svc in $$(docker service ls --filter label=com.docker.stack.namespace=$$STACK --format '{{.Name}}'); do
             [ "$$svc" = "$$SELF" ] && continue
-            [ -z "$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc)" ] && continue
+            # Solo réplicas ya listas: healthy, o sin healthcheck (bases, redis...). Una réplica de Java
+            # en "health: starting" todavía no está en el DNS de Swarm (entra recién al pasar a healthy),
+            # y al prender la VM eso tarda varios minutos: si se la contara, el vigía la recrearía en
+            # pleno arranque, una y otra vez.
+            ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=healthy)
+            [ -z "$$ready" ] && ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=none)
+            [ -z "$$ready" ] && continue
             checked=$$((checked + 1))
             name=$${svc#"$$STACK"_}
             if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
