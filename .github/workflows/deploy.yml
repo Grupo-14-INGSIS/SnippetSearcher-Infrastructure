@@ -1,21 +1,20 @@
 name: Deploy Stack
 
-# Despliega los 5 stacks de Swarm (infra, accessmanager, runner, app, ui) cuando hay un push a Infra.
-# Corre desde el runner de Actions contra el Docker de la VM por SSH (contexto swarm-vm): los archivos
-# stacks/*.yml, la config de nginx y los SQL de init se leen del checkout y viajan por la API de Docker.
-# A la VM no se le copia ningún archivo y no necesita ~/.env. El login a GHCR se hace acá y
-# --with-registry-auth se lo pasa a Swarm.
+# Despliega el stack completo de Swarm cuando hay un push a Infra. Corre desde el runner de Actions
+# contra el Docker de la VM por SSH (contexto swarm-vm): docker-stack.yml, la config de nginx y
+# los SQL de init se leen del checkout y viajan por la API de Docker. A la VM no se le copia ningún
+# archivo y no necesita ~/.env. El login a GHCR se hace acá y --with-registry-auth se lo pasa a Swarm.
 #
-# Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag de stacks/*.yml
+# Es idempotente: `docker stack deploy --resolve-image always` traduce cada tag de docker-stack.yml
 # a su digest y solo actualiza los servicios cuya especificación cambió. Un commit automático de
 # update-infra solo actualiza su servicio. Un commit humano también reinicia los microservicios,
 # salvo que toque solo archivos .md.
 #
 # Si se pusheó con la VM apagada: al prenderla, Actions -> Deploy Stack -> Run workflow (rama
-# develop o main) pone cada servicio en la versión anotada en stacks/*.yml.
+# develop o main) pone cada servicio en la versión anotada en docker-stack.yml.
 #
 # Este archivo es igual en develop y en main: esas ramas solo difieren en las líneas `image:` de
-# stacks/{app,runner,accessmanager,ui}.yml. Ver Documentación/PIPELINE_CI_CD.md.
+# docker-stack.yml. Ver Documentación/PIPELINE_CI_CD.md.
 
 on:
   push:
@@ -34,14 +33,14 @@ jobs:
     if: github.ref_name == 'develop' || github.ref_name == 'main'
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'main' && 'production' || 'develop' }}
-    # Un deploy a la vez por ambiente
+    # Un deploy del stack a la vez por ambiente
     concurrency:
       group: stack-${{ github.ref_name }}
       cancel-in-progress: false
     env:
-      SHARED_NETWORK: snippetsearcher-net
+      STACK: snippetsearcher
       DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
-      # Para stacks/*.yml: App, Runner y AccessManager toman la clave de New Relic de acá (no del repo)
+      # Para docker-stack.yml: App, Runner y AccessManager toman la clave de New Relic de acá (no del repo)
       NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
       NEW_RELIC_APP_NAME_APP: ${{ vars.NEW_RELIC_APP_NAME_APP }}
       NEW_RELIC_APP_NAME_RUNNER: ${{ vars.NEW_RELIC_APP_NAME_RUNNER }}
@@ -98,40 +97,17 @@ jobs:
           docker context create swarm-vm \
             --docker "host=ssh://${SSH_USER}@${SSH_HOST}"
 
-      # La red overlay conecta los 5 stacks entre sí. Los volúmenes se crean de forma idempotente
-      # con el nombre histórico `snippetsearcher_*`: conserva datos en VMs existentes y también
-      # permite desplegar desde cero en una VM limpia.
-      - name: Ensure shared overlay network and persistent volumes
+      - name: Deploy stack
+        env:
+          COMPOSE_FILE: docker-stack.yml
         run: |
           set -euo pipefail
 
-          if ! docker --context swarm-vm network inspect "$SHARED_NETWORK" >/dev/null 2>&1; then
-            echo "Creando red overlay compartida: $SHARED_NETWORK"
-            docker --context swarm-vm network create --driver overlay --attachable "$SHARED_NETWORK"
-          fi
-
-          for vol in \
-            snippetsearcher_app-pgdata \
-            snippetsearcher_runner-pgdata \
-            snippetsearcher_accessmanager-pgdata \
-            snippetsearcher_redis-data \
-            snippetsearcher_azurite-data \
-            snippetsearcher_fluentbit-state; do
-            docker --context swarm-vm volume create "$vol" >/dev/null
-          done
-
-      - name: Deploy stacks
-        run: |
-          set -euo pipefail
-
-          for stack in infra accessmanager runner app ui; do
-            echo "Desplegando stack: $stack (stacks/${stack}.yml)"
-            docker --context swarm-vm stack deploy \
-              --with-registry-auth \
-              --resolve-image always \
-              --compose-file "stacks/${stack}.yml" \
-              "$stack"
-          done
+          docker --context swarm-vm stack deploy \
+            --with-registry-auth \
+            --resolve-image always \
+            --compose-file "$COMPOSE_FILE" \
+            "$STACK"
 
       # Commit automático (update-infra): se actualiza solo el servicio cuya versión cambió.
       # Commit humano: también se reinician los microservicios, salvo que toque solo archivos .md.
@@ -165,58 +141,46 @@ jobs:
         if: steps.redeploy.outputs.force == 'true'
         run: |
           set -euo pipefail
-          for full_svc in \
-            accessmanager_snippetsearcher-accessmanager \
-            runner_snippetsearcher-runner \
-            app_snippetsearcher-app \
-            ui_snippetsearcher-ui; do
-            echo "Reiniciando $full_svc"
-            docker --context swarm-vm service update --force --with-registry-auth "$full_svc"
+          for svc in snippetsearcher-accessmanager snippetsearcher-runner snippetsearcher-app snippetsearcher-ui; do
+            echo "Reiniciando $svc"
+            docker --context swarm-vm service update --force --with-registry-auth "${STACK}_${svc}"
           done
 
       # `docker stack deploy` NO espera: le pide el cambio a Swarm y termina mientras la VM sigue bajando
       # las imágenes. Si un pull falla, Swarm rechaza la tarea ("No such image"), hace rollback y el
       # workflow terminaría en verde con la versión vieja. Acá se espera a que cada servicio propio corra
-      # exactamente el digest de la imagen que pide su archivo stacks/*.yml; si hizo rollback, falla en rojo.
+      # exactamente el digest de la imagen que pide docker-stack.yml; si hizo rollback, falla en rojo.
       - name: Verify every service runs the current image (fail on rollback)
         run: |
           expected() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r .digest; }
           declare -A want
-          declare -A stack_of=(
-            [snippetsearcher-app]="app"
-            [snippetsearcher-runner]="runner"
-            [snippetsearcher-accessmanager]="accessmanager"
-            [snippetsearcher-ui]="ui"
-          )
           for svc in snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager snippetsearcher-ui; do
-            stack="${stack_of[$svc]}"
             repo="$svc"; [ "$svc" = "snippetsearcher-ui" ] && repo="printscript-ui"
-            stack_file="stacks/${stack}.yml"
-            # La versión sale de cada stack: cada rama de Infra tiene las suyas (develop-<sha> / production-<sha>)
-            image="$(grep -E "^[[:space:]]*image:[[:space:]]*ghcr\.io/grupo-14-ingsis/${repo}:" "$stack_file" | awk '{print $2}')"
+            # La versión sale del stack: cada rama de Infra tiene las suyas (develop-<sha> / production-<sha>)
+            image="$(grep -E "^[[:space:]]*image:[[:space:]]*ghcr\.io/grupo-14-ingsis/${repo}:" docker-stack.yml | awk '{print $2}')"
             digest="$(expected "$image")"
             if [ -z "$image" ] || [ -z "$digest" ] || [ "$digest" = "null" ]; then
-              echo "::error::No se pudo resolver la imagen de $svc en $stack_file: '$image'"
+              echo "::error::No se pudo resolver la imagen de $svc en docker-stack.yml: '$image'"
               exit 1
             fi
-            want["${stack}_${svc}"]="$digest"
+            want[$svc]="$digest"
           done
           deadline=$((SECONDS + 2400))   # start_period de los Spring es 900s y el update va de a una réplica
           while :; do
             missing=""
-            for full_svc in "${!want[@]}"; do
+            for svc in "${!want[@]}"; do
               # --no-trunc: sin él, docker service ps recorta el digest de la imagen y nunca coincidiría
-              running="$(docker --context swarm-vm service ps "$full_svc" --no-trunc --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
+              running="$(docker --context swarm-vm service ps "${STACK}_${svc}" --no-trunc --filter desired-state=running --format '{{.Image}} {{.CurrentState}}')"
               total="$(echo "$running" | grep -c . || true)"
-              ok="$(echo "$running" | grep -F "${want[$full_svc]}" | grep -c '^.* Running' || true)"
-              [ "$total" -gt 0 ] && [ "$ok" = "$total" ] || missing="$missing $full_svc"
+              ok="$(echo "$running" | grep -F "${want[$svc]}" | grep -c '^.* Running' || true)"
+              [ "$total" -gt 0 ] && [ "$ok" = "$total" ] || missing="$missing $svc"
             done
-            [ -z "$missing" ] && { echo "Todos los servicios corren la imagen de stacks/*.yml"; break; }
-            for full_svc in $missing; do
-              st="$(docker --context swarm-vm service inspect "$full_svc" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}')"
+            [ -z "$missing" ] && { echo "Todos los servicios corren la imagen de docker-stack.yml"; break; }
+            for svc in $missing; do
+              st="$(docker --context swarm-vm service inspect "${STACK}_${svc}" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}')"
               if [ "$st" = "rollback_completed" ] || [ "$st" = "rollback_paused" ]; then
-                echo "::error::$full_svc hizo rollback a la versión anterior. Tareas recientes:"
-                docker --context swarm-vm service ps "$full_svc" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -n 6
+                echo "::error::$svc hizo rollback a la versión anterior. Tareas recientes:"
+                docker --context swarm-vm service ps "${STACK}_${svc}" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -n 6
                 echo "::error::Si dice 'No such image', falló el pull en la VM. La causa real está en: sudo journalctl -u docker | grep 'pulling image failed'"
                 exit 1
               fi
@@ -227,15 +191,14 @@ jobs:
 
       # Recién ahora, con todas las imágenes ya bajadas y corriendo. Un `docker image prune` mientras la
       # VM baja una imagen borra las capas a medio extraer ("failed to Lchown ... no such file or
-      # directory", "lease does not exist") y el pull falla.
+      # directory", "lease does not exist") y el pull falla: así fallaba el App y el Runner (imágenes
+      # grandes, tardan más que la UI) cuando el prune venía justo después de `docker stack deploy`.
       - name: Clean up unused configs and images
         run: |
           # Los configs en uso no se pueden borrar: solo se van los de versiones anteriores
-          for stack in infra app accessmanager; do
-            docker --context swarm-vm config ls \
-              --filter "label=com.docker.stack.namespace=$stack" -q \
-              | xargs -r docker --context swarm-vm config rm 2>/dev/null || true
-          done
+          docker --context swarm-vm config ls \
+            --filter "label=com.docker.stack.namespace=$STACK" -q \
+            | xargs -r docker --context swarm-vm config rm 2>/dev/null || true
           docker --context swarm-vm image prune -f || true
 
       # Métricas de la VM y de cada contenedor en New Relic, sin instalar nada en la VM. Va con `docker run`
@@ -279,8 +242,4 @@ jobs:
             "$NR_IMAGE"
 
       - name: Stack status
-        run: |
-          for stack in infra accessmanager runner app ui; do
-            echo "=== Stack: $stack ==="
-            docker --context swarm-vm stack services "$stack"
-          done
+        run: docker --context swarm-vm stack services "$STACK"
