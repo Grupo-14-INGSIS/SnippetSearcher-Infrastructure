@@ -71,7 +71,7 @@ Se detectó que **New Relic** está integrado en los tres microservicios Java/Ko
 ## 3. Solución: Cómo separar las métricas entre Develop y Producción
 
 ### Paso 1: Configurar variables con fallback en `docker-compose.yml`
-En [`SnippetSearcher-Infrastructure/docker-compose.yml`](docker-compose.yml), agregar la variable `NEW_RELIC_APP_NAME` en la sección `environment` de cada servicio:
+En [`SnippetSearcher-Infrastructure/docker-compose.yml`](../../docker-compose.yml), agregar la variable `NEW_RELIC_APP_NAME` en la sección `environment` de cada servicio:
 
 ```yaml
   # 1. App
@@ -177,7 +177,7 @@ sudo docker image prune -f
 
 ### Arquitectura Dual
 
-La configuración de [`docker-compose.yml`](docker-compose.yml) cuenta con **dos capas de acceso en paralelo**:
+La configuración de [`docker-compose.yml`](../../docker-compose.yml) cuenta con **dos capas de acceso en paralelo**:
 
 ```text
                +---------------------------------------------+

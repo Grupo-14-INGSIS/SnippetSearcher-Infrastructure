@@ -1,359 +1,79 @@
 version: '3.8'
 
-# Healthcheck de los servicios Spring: Swarm solo les manda tráfico cuando el 8080 acepta
-# conexiones, reemplaza las réplicas que dejan de responder y el rollback del update
-# puede detectar una versión que no arranca. Sin esto, una réplica caída o arrancando
-# figura "Running" y nginx devuelve 502. bash viene en eclipse-temurin, no hace falta curl.
-x-spring-healthcheck: &spring-healthcheck
-  test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080' || exit 1"]
-  interval: 10s
-  timeout: 3s
-  retries: 3
-  # Al prender la VM arrancan las 6 JVM a la vez (2 App, 2 Runner, 2 AccessManager) sobre 2 CPUs
-  # (load average ~28): con 420s el App no llegaba a abrir el 8080, Swarm lo mataba como
-  # "unhealthy" (exit 137) y volvía a arrancar, en un ciclo que no terminaba. Durante
-  # start_period los fallos no cuentan, así Swarm no lo mata en pleno arranque.
-  start_period: 900s
-
-# Opciones de la JVM de los servicios Spring. TieredStopAtLevel=1 usa solo el compilador JIT
-# rápido (C1): arranca bastante antes y gasta mucha menos CPU al inicio, a cambio de algo menos
-# de rendimiento una vez arrancada. Con 2 CPUs y 6 JVM arrancando juntas, compensa.
-x-java-opts: &java-opts "-Djava.net.preferIPv4Stack=true -XX:TieredStopAtLevel=1"
-
-# Política de reinicio de los servicios Spring: sin max_attempts, para que Swarm no se
-# rinda si una dependencia (base, DNS) tarda en volver y el servicio quede caído.
-x-spring-restart: &spring-restart
-  condition: any
-  delay: 10s
-
-# Arranque de los servicios Spring: esperan a que su base (DB_HOST:DB_PORT) acepte conexiones antes
-# de lanzar la JVM. Swarm no tiene `depends_on`: al prender la VM o en un deploy levanta todo a la
-# vez, y si el servicio arrancaba antes que su Postgres, Spring fallaba ("connection attempt failed",
-# exit 1) y Swarm lo tomaba como versión rota y hacía rollback. Los 5 s extra cubren el momento en que
-# Postgres ya abrió el puerto pero todavía responde "the database system is starting up".
-# Lo que sigue a `exec` es el mismo ENTRYPOINT de los Dockerfile. `$$` es un `$` literal en el stack.
-x-wait-for-db: &wait-for-db
-  - bash
-  - -c
-  - |
-    echo "[arranque] esperando a la base $$DB_HOST:$$DB_PORT"
-    until bash -c "</dev/tcp/$$DB_HOST/$$DB_PORT" 2>/dev/null; do sleep 2; done
-    echo "[arranque] base disponible, arranca la aplicación"
-    sleep 5
-    exec java -javaagent:/usr/local/newrelic/newrelic.jar -jar /app/app.jar
-
-x-spring-update: &spring-update
-  parallelism: 1
-  delay: 10s
-  order: start-first
-  failure_action: rollback
-  # Tiempo que Swarm vigila la tarea nueva antes de dar el update por bueno
-  monitor: 60s
-
 services:
-  # -------------------------------------------------------------
-  # App (2 réplicas con balanceo de carga interno Swarm)
-  # -------------------------------------------------------------
-  # Sin `ports`: igual que el resto de los servicios, solo se alcanza por la red interna del
-  # stack. Desde afuera se entra únicamente por el reverse-proxy (80/443). Los puertos
-  # 19081-19084 / 5173 / 10000-10002 quedan solo en docker-compose.yml (desarrollo local).
-  snippetsearcher-app:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-9d9ed55798d8658fd394b8f616d5c475bf12ccfc
+  reverse-proxy:
+    image: nginx:stable-alpine
+    ports:
+      - { target: 80, published: 80, mode: ingress }
+      - { target: 443, published: 443, mode: ingress }
     environment:
-      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
-      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
-      JAVA_TOOL_OPTIONS: *java-opts
-      DB_USER: app
-      DB_PASSWORD: app
-      DB_NAME: appdb
-      DB_HOST: appdb
-      DB_PORT: 5432
-      ACCESS_MANAGER_HOST: snippetsearcher-accessmanager
-      ACCESS_MANAGER_PORT: 8080
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      RUNNER_HOST: snippetsearcher-runner
-      RUNNER_PORT: 8080
-    entrypoint: *wait-for-db
-    healthcheck: *spring-healthcheck
-    deploy:
-      replicas: 2
-      restart_policy: *spring-restart
-      update_config: *spring-update
-
-  # -------------------------------------------------------------
-  # Base de Datos App (1 réplica con persistencia de volumen)
-  # -------------------------------------------------------------
-  appdb:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: appdb
-    volumes:
-      - app-pgdata:/var/lib/postgresql/data
-    # Script de init como config de Swarm (no bind mount): no necesita archivos en la VM
+      - DOMAIN_NAME=${DOMAIN_NAME:?falta DOMAIN_NAME}
     configs:
-      - source: app_init_sql
-        target: /docker-entrypoint-initdb.d/01-init-snippet.sql
+      - { source: nginx_conf, target: /etc/nginx/templates/app.conf.template }
+      - { source: nginx_50x_page, target: /usr/share/nginx/html/errors/50x.html }
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    # Toma el certificado renovado cada 6 h con `nginx -s reload` (sin cortar conexiones)
+    command: >
+      /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
+      (while true; do sleep 21600; nginx -s reload; done) &
+      exec nginx -g 'daemon off;'"
+    # El nombre del servicio en cada línea de log: así nginx-logs reconoce las de nginx
+    logging:
+      driver: json-file
+      options: { labels: com.docker.swarm.service.name, max-size: 10m, max-file: "3" }
+    networks: [snippetsearcher-net]
+    # "any": al apagar la VM nginx sale con 0 y con on-failure Swarm no lo volvía a levantar
     deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: { condition: any, delay: 5s }
 
-  # -------------------------------------------------------------
-  # Redis: EXCLUSIVAMENTE Message Queue (Streams)
-  # -------------------------------------------------------------
+  # Cola de mensajes (Redis Streams) de App y Runner
   redis:
     image: redis:7
     volumes:
       - redis-data:/data
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
+    networks: [snippetsearcher-net]
 
-  # -------------------------------------------------------------
-  # Runner (2 réplicas con balanceo de carga interno Swarm)
-  # La ejecución interactiva es stateless: el cliente manda los inputs
-  # acumulados y el Runner re-ejecuta, así cualquier réplica puede atender.
-  # -------------------------------------------------------------
-  snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-efca859d6310f24bdebc442287a2e92d386e17bb
-    environment:
-      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
-      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
-      JAVA_TOOL_OPTIONS: *java-opts
-      DB_USER: app
-      DB_PASSWORD: app
-      DB_NAME: snippet-db
-      DB_HOST: runner-db
-      DB_PORT: 5432
-      BUCKET_SERVICE: asset-service
-      BUCKET_PORT: 8080
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    entrypoint: *wait-for-db
-    healthcheck: *spring-healthcheck
-    deploy:
-      replicas: 2
-      restart_policy: *spring-restart
-      update_config: *spring-update
-
-  # -------------------------------------------------------------
-  # Base de Datos Runner
-  # -------------------------------------------------------------
-  runner-db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: snippet-db
-    volumes:
-      - runner-pgdata:/var/lib/postgresql/data
-    # db/runner-init está vacío: las tablas del Runner las crea Hibernate
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-
-  # -------------------------------------------------------------
-  # Asset Service & Emulador Azurite
-  # -------------------------------------------------------------
+  # Lo usa el Runner (por snippetsearcher-net); habla con azurite por la red interna de infra
   asset-service:
     image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
     environment:
       AZURE_HOST: http://azurite
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
+    networks: [default, snippetsearcher-net]
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
     volumes:
       - azurite-data:/data
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
 
-  # -------------------------------------------------------------
-  # AccessManager (2 réplicas con balanceo de carga interno Swarm)
-  # -------------------------------------------------------------
-  snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-5d21e174978d871419481903eb514a96b2f4218a
-    environment:
-      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
-      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
-      JAVA_TOOL_OPTIONS: *java-opts
-      DB_USER: access_manager
-      DB_PASSWORD: access_manager
-      DB_NAME: compose-db
-      DB_HOST: accessmanager-db
-      DB_PORT: 5432
-    entrypoint: *wait-for-db
-    healthcheck: *spring-healthcheck
-    deploy:
-      replicas: 2
-      restart_policy: *spring-restart
-      update_config: *spring-update
-
-  # -------------------------------------------------------------
-  # Base de Datos AccessManager
-  # -------------------------------------------------------------
-  accessmanager-db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: access_manager
-      POSTGRES_PASSWORD: access_manager
-      POSTGRES_DB: compose-db
-    volumes:
-      - accessmanager-pgdata:/var/lib/postgresql/data
-    configs:
-      - source: accessmanager_init_sql
-        target: /docker-entrypoint-initdb.d/01-init-accessmanager.sql
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-
-  # -------------------------------------------------------------
-  # UI (2 réplicas con balanceo de carga interno Swarm; es nginx, casi no consume CPU)
-  # -------------------------------------------------------------
-  snippetsearcher-ui:
-    image: ghcr.io/grupo-14-ingsis/printscript-ui:develop-a9efcdb795f495a9394c4f55423ae737d26acd5f
-    # Las VITE_* de abajo no tienen efecto en runtime (Vite las fija al compilar) y la UI, fuera
-    # de localhost, llama a window.location.origin (/api): todo pasa por el reverse-proxy hacia App.
-    environment:
-      - VITE_AUTH0_DOMAIN=dev-65tlgyzfpbzeka8a.us.auth0.com
-      - VITE_AUTH0_CLIENT_ID=pDaLfxwVAerUnhjKfJNfxLfduUPJQi3x
-      - VITE_AUTH0_AUDIENCE=https://api.snippets.com
-      - VITE_AUTH0_REALM=Username-Password-Authentication
-      - VITE_FRONTEND_URL=http://localhost:5173
-      - VITE_API_URL=http://localhost:19081
-      - VITE_BACKEND_URL=http://localhost:19081
-    deploy:
-      replicas: 2
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-      update_config:
-        parallelism: 1
-        delay: 10s
-        order: start-first
-        failure_action: rollback
-
-  # -------------------------------------------------------------
-  # Reverse Proxy (Nginx como Edge Gateway)
-  # -------------------------------------------------------------
-  reverse-proxy:
-    image: nginx:stable-alpine
-    ports:
-      - target: 80
-        published: 80
-        mode: ingress
-      - target: 443
-        published: 443
-        mode: ingress
-    environment:
-      - DOMAIN_NAME=${DOMAIN_NAME:?DOMAIN_NAME es obligatorio (variable del environment de GitHub)}
-    # La config de nginx viaja como config de Swarm. Los certificados están en /etc/letsencrypt
-    # del host (del sistema, no del home): el servicio certbot los escribe y nginx los lee.
-    configs:
-      - source: nginx_conf
-        target: /etc/nginx/templates/app.conf.template
-      - source: nginx_50x_page
-        target: /usr/share/nginx/html/errors/50x.html
-    volumes:
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      # Tokens del desafío ACME: certbot los escribe y nginx los sirve en el puerto 80.
-      # La carpeta tiene que existir en la VM antes del deploy (sudo mkdir -p /var/www/certbot).
-      - /var/www/certbot:/var/www/certbot:ro
-    # nginx lee el certificado solo al arrancar: cada 6 h hace `nginx -s reload` (sin cortar
-    # conexiones) para tomar el que haya renovado certbot.
-    command: >-
-      /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
-      (while true; do sleep 21600; nginx -s reload; done) &
-      exec nginx -g 'daemon off;'"
-    # `labels`: Docker agrega a cada línea de log el nombre del servicio, y así nginx-logs reconoce
-    # cuáles son de nginx. max-size/max-file: el log de acceso no llena el disco.
-    logging:
-      driver: json-file
-      options:
-        labels: com.docker.swarm.service.name
-        max-size: 10m
-        max-file: "3"
-    deploy:
-      replicas: 1
-      restart_policy:
-        # "any" y no "on-failure": al apagar la VM nginx recibe SIGQUIT y sale con 0
-        # ("Complete"); con on-failure Swarm no lo vuelve a levantar al reiniciar y
-        # el sitio queda en ERR_CONNECTION_REFUSED aunque el resto del stack este up.
-        condition: any
-        delay: 5s
-
-  # -------------------------------------------------------------
-  # Logs de nginx a New Relic (Fluent Bit). Lee los archivos de log que Docker ya guarda en la VM
-  # (solo lectura) y manda únicamente los del reverse-proxy. No instala nada en la VM.
-  # -------------------------------------------------------------
+  # Logs de nginx a New Relic (Fluent Bit)
   nginx-logs:
     image: fluent/fluent-bit:3.1.9
     environment:
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
       DOMAIN_NAME: ${DOMAIN_NAME}
     configs:
-      - source: fluentbit_conf
-        target: /fluent-bit/etc/fluent-bit.conf
-      - source: fluentbit_parsers
-        target: /fluent-bit/etc/parsers-nr.conf
+      - { source: fluentbit_conf, target: /fluent-bit/etc/fluent-bit.conf }
+      - { source: fluentbit_parsers, target: /fluent-bit/etc/parsers-nr.conf }
     volumes:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - fluentbit-state:/state
     deploy:
-      replicas: 1
-      resources:
-        limits:
-          memory: 64M
-      restart_policy:
-        condition: any
-        delay: 10s
+      resources: { limits: { memory: 64M } }
 
-  # -------------------------------------------------------------
-  # Certbot: renueva el certificado de Let's Encrypt (modo webroot)
-  # Cada 12 h corre `certbot renew`, que solo renueva si faltan menos de 30 días. Deja el token
-  # del desafío en /var/www/certbot (lo sirve el reverse-proxy en el 80) y el certificado nuevo
-  # en /etc/letsencrypt. El primer certificado se pide a mano una vez (ver HTTPS_NGINX_CORS.md).
-  # -------------------------------------------------------------
+  # Renueva el certificado de Let's Encrypt cada 12 h (solo si faltan menos de 30 días)
   certbot:
     image: certbot/certbot:v2.11.0
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt
       - /var/www/certbot:/var/www/certbot
-    entrypoint: >-
+    entrypoint: >
       /bin/sh -c "trap exit TERM;
       while true; do certbot renew --webroot -w /var/www/certbot; sleep 43200 & wait $${!}; done"
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: any
-        delay: 30s
 
-  # -------------------------------------------------------------
-  # Vigía del DNS interno de Swarm (sin nada instalado en la VM)
-  # -------------------------------------------------------------
-  # Después de un apagado de golpe, Swarm arranca con contenedores fantasma ("RW layer ... not found",
-  # "No such container") y a veces un servicio queda corriendo pero SIN nombre en el DNS interno: por
-  # ejemplo appdb 1/1, y App esperándola para siempre ("appdb: Name or service not known"). La
-  # reparación es recrear su tarea, que se vuelve a registrar: `docker service update --force`.
-  # Este servicio lo hace solo: cada 30 s prueba, desde un contenedor del stack, que cada servicio con
-  # tareas corriendo resuelva por nombre. Si uno no resuelve 4 vueltas seguidas (2 min), lo recrea.
-  # Un servicio sin réplicas listas no se mira: ni sin tareas, ni con las de Java todavía en
-  # "health: starting" (Swarm las agrega al DNS recién cuando pasan a healthy).
-  # Usa el socket de Docker (como el agente de New Relic): solo lee el estado y fuerza ese update.
-  # Es la parte "revisar el DNS" de vm/snippetsearcher-lifecycle.sh, pero desplegada con el stack.
+  # Vigía del DNS interno de Swarm. Después de un apagado de golpe, a veces un servicio queda corriendo
+  # pero SIN nombre en el DNS; se repara recreando su tarea (`docker service update --force`).
   dns-watchdog:
     image: docker:27-cli
     volumes:
@@ -362,53 +82,32 @@ services:
       - /bin/sh
       - -c
       - |
-        STACK=snippetsearcher
-        SELF=$${STACK}_dns-watchdog
+        SELF=infra_dns-watchdog
         mkdir -p /tmp/fails
-        echo "[dns-watchdog] vigilando el DNS interno del stack $$STACK"
+        echo "[dns-watchdog] vigilando el DNS interno de todos los stacks"
         while true; do
           sleep 30
-          # Un contenedor del stack con getent (postgres, redis y las imágenes de Java lo tienen). Se rota:
-          # cada vuelta empieza por uno distinto, así un contenedor con el DNS roto no se usa siempre.
-          probe=""
-          for c in $$(docker ps -q --filter label=com.docker.stack.namespace=$$STACK | shuf); do
-            if docker exec "$$c" getent hosts localhost >/dev/null 2>&1; then probe=$$c; break; fi
-          done
-          [ -z "$$probe" ] && continue
-          # Primera pasada: qué servicios corriendo no resuelven
-          checked=0; broken=""
-          for svc in $$(docker service ls --filter label=com.docker.stack.namespace=$$STACK --format '{{.Name}}'); do
+          for svc in $$(docker service ls --format '{{.Name}}'); do
             [ "$$svc" = "$$SELF" ] && continue
-            # Solo réplicas ya listas: healthy, o sin healthcheck (bases, redis...). Una réplica de Java
-            # en "health: starting" todavía no está en el DNS de Swarm (entra recién al pasar a healthy),
-            # y al prender la VM eso tarda varios minutos: si se la contara, el vigía la recrearía en
-            # pleno arranque, una y otra vez.
-            ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=healthy)
-            [ -z "$$ready" ] && ready=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=none)
-            [ -z "$$ready" ] && continue
-            checked=$$((checked + 1))
-            name=$${svc#"$$STACK"_}
-            if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
-              rm -f "/tmp/fails/$$name"
-            else
-              broken="$$broken $$svc"
+            # Solo réplicas listas: healthy, o sin healthcheck (bases, redis...). Una de Java en
+            # "health: starting" todavía no está en el DNS: si se la contara, se recrearía en pleno arranque.
+            c=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=healthy | head -n 1)
+            [ -z "$$c" ] && c=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=none | head -n 1)
+            [ -z "$$c" ] && continue
+            docker exec "$$c" getent hosts localhost >/dev/null 2>&1 || continue
+            # <stack>_<servicio> -> <servicio> (los nombres de stack no tienen "_")
+            name=$${svc#*_}
+            if docker exec "$$c" getent hosts "$$name" >/dev/null 2>&1; then
+              rm -f "/tmp/fails/$$svc"
+              continue
             fi
-          done
-          # Si NINGUNO resuelve, el roto es el DNS del contenedor de prueba, no los servicios:
-          # no se cuenta la vuelta (si no, a los 2 minutos se recrearía el stack entero)
-          if [ "$$checked" -gt 1 ] && [ "$$(echo $$broken | wc -w)" -eq "$$checked" ]; then
-            echo "[dns-watchdog] ningún servicio resuelve desde $$probe: se prueba desde otro contenedor"
-            continue
-          fi
-          for svc in $$broken; do
-            name=$${svc#"$$STACK"_}
-            n=$$(( $$(cat "/tmp/fails/$$name" 2>/dev/null || echo 0) + 1 ))
-            echo "$$n" > "/tmp/fails/$$name"
-            echo "[dns-watchdog] $$name corre pero no resuelve por nombre ($$n/4)"
+            n=$$(( $$(cat "/tmp/fails/$$svc" 2>/dev/null || echo 0) + 1 ))
+            echo "$$n" > "/tmp/fails/$$svc"
+            echo "[dns-watchdog] $$svc corre pero no resuelve por nombre ($$n/4)"
             if [ "$$n" -ge 4 ]; then
               echo "[dns-watchdog] recreando $$svc (docker service update --force)"
               docker service update --force --detach "$$svc" >/dev/null
-              rm -f "/tmp/fails/$$name"
+              rm -f "/tmp/fails/$$svc"
             fi
           done
         done
@@ -423,40 +122,20 @@ services:
       resources:
         limits:
           memory: 64M
+# Red compartida entre stacks. `name` fijo: sin él se llamaría infra_snippetsearcher-net.
+networks:
+  snippetsearcher-net: { name: snippetsearcher-net, driver: overlay, attachable: true }
 
-# -------------------------------------------------------------
-# Volúmenes Persistentes
-# -------------------------------------------------------------
+# `name` fijo = los volúmenes que ya existen del stack único. Sin `name` serían infra_redis-data, etc.: VACÍOS.
+# fluentbit-state guarda hasta dónde leyó Fluent Bit: uno nuevo reenviaría todos los logs viejos.
 volumes:
-  app-pgdata:
-  redis-data:
-  accessmanager-pgdata:
-  runner-pgdata:
-  azurite-data:
-  fluentbit-state:
+  redis-data: { name: snippetsearcher_redis-data }
+  azurite-data: { name: snippetsearcher_azurite-data }
+  fluentbit-state: { name: snippetsearcher_fluentbit-state }
 
-# -------------------------------------------------------------
-# Configs de Swarm: archivos del repo que antes se copiaban a la VM con scp y se montaban
-# desde ~/. `docker stack deploy` los lee en el runner de Actions y los guarda en Swarm.
-# Un config no se puede modificar: el nombre lleva el hash del contenido (lo calcula el
-# workflow), así un cambio crea uno nuevo y, si el archivo no cambió, no se reinicia nada.
-# -------------------------------------------------------------
+# Un config de Swarm no se puede modificar: el nombre lleva el hash de reverse-proxy/ (CONFIG_HASH).
 configs:
-  nginx_conf:
-    name: nginx_conf_${NGINX_CONF_HASH:-local}
-    file: ./reverse-proxy/nginx/conf.d/app.conf
-  nginx_50x_page:
-    name: nginx_50x_${NGINX_50X_HASH:-local}
-    file: ./reverse-proxy/nginx/errors/50x.html
-  fluentbit_conf:
-    name: fluentbit_conf_${FLUENTBIT_CONF_HASH:-local}
-    file: ./reverse-proxy/fluent-bit/fluent-bit.conf
-  fluentbit_parsers:
-    name: fluentbit_parsers_${FLUENTBIT_PARSERS_HASH:-local}
-    file: ./reverse-proxy/fluent-bit/parsers.conf
-  app_init_sql:
-    name: app_init_${APP_INIT_HASH:-local}
-    file: ./db/app-init/01-init-snippet.sql
-  accessmanager_init_sql:
-    name: accessmanager_init_${ACCESSMANAGER_INIT_HASH:-local}
-    file: ./db/accessmanager-init/01-init-accessmanager.sql
+  nginx_conf: { name: "nginx_conf_${CONFIG_HASH:-local}", file: ./reverse-proxy/nginx/conf.d/app.conf }
+  nginx_50x_page: { name: "nginx_50x_${CONFIG_HASH:-local}", file: ./reverse-proxy/nginx/errors/50x.html }
+  fluentbit_conf: { name: "fluentbit_conf_${CONFIG_HASH:-local}", file: ./reverse-proxy/fluent-bit/fluent-bit.conf }
+  fluentbit_parsers: { name: "fluentbit_parsers_${CONFIG_HASH:-local}", file: ./reverse-proxy/fluent-bit/parsers.conf }
