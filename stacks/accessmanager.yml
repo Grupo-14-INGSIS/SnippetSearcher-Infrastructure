@@ -34,7 +34,7 @@ x-spring-update: &spring-update
 
 services:
   snippetsearcher-accessmanager:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-5d21e174978d871419481903eb14a96b2f4218a
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-accessmanager:develop-b170bf75bb581a6b88900882fe594f5537ebed63
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_ACCESS:-AccessManagerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
