@@ -1,0 +1,96 @@
+version: '3.8'
+
+# Stack del servicio SnippetSearcher-App y su base de datos Postgres (`appdb`).
+
+x-spring-healthcheck: &spring-healthcheck
+  test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080' || exit 1"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  start_period: 900s
+
+x-java-opts: &java-opts "-Djava.net.preferIPv4Stack=true -XX:TieredStopAtLevel=1"
+
+x-spring-restart: &spring-restart
+  condition: any
+  delay: 10s
+
+x-wait-for-db: &wait-for-db
+  - bash
+  - -c
+  - |
+    echo "[arranque] esperando a la base $$DB_HOST:$$DB_PORT"
+    until bash -c "</dev/tcp/$$DB_HOST/$$DB_PORT" 2>/dev/null; do sleep 2; done
+    echo "[arranque] base disponible, arranca la aplicación"
+    sleep 5
+    exec java -javaagent:/usr/local/newrelic/newrelic.jar -jar /app/app.jar
+
+x-spring-update: &spring-update
+  parallelism: 1
+  delay: 10s
+  order: start-first
+  failure_action: rollback
+  monitor: 60s
+
+services:
+  snippetsearcher-app:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-app:develop-9d9ed55798d8658fd394b8f616d5c475bf12ccfc
+    environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_APP:-AppIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      JAVA_TOOL_OPTIONS: *java-opts
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: appdb
+      DB_HOST: appdb
+      DB_PORT: 5432
+      ACCESS_MANAGER_HOST: snippetsearcher-accessmanager
+      ACCESS_MANAGER_PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RUNNER_HOST: snippetsearcher-runner
+      RUNNER_PORT: 8080
+    entrypoint: *wait-for-db
+    healthcheck: *spring-healthcheck
+    networks:
+      default:
+      snippetsearcher-net:
+        aliases:
+          - snippetsearcher-app
+    deploy:
+      replicas: 2
+      restart_policy: *spring-restart
+      update_config: *spring-update
+
+  appdb:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: appdb
+    volumes:
+      - app-pgdata:/var/lib/postgresql/data
+    configs:
+      - source: app_init_sql
+        target: /docker-entrypoint-initdb.d/01-init-snippet.sql
+    networks:
+      - default
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  app-pgdata:
+    external: true
+    name: snippetsearcher_app-pgdata
+
+configs:
+  app_init_sql:
+    name: app_init_${APP_INIT_HASH:-local}
+    file: ../db/app-init/01-init-snippet.sql
+
+networks:
+  default:
+  snippetsearcher-net:
+    external: true

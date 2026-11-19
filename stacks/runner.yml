@@ -1,0 +1,87 @@
+version: '3.8'
+
+# Stack del servicio SnippetSearcher-Runner y su base de datos Postgres (`runner-db`).
+
+x-spring-healthcheck: &spring-healthcheck
+  test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080' || exit 1"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  start_period: 900s
+
+x-java-opts: &java-opts "-Djava.net.preferIPv4Stack=true -XX:TieredStopAtLevel=1"
+
+x-spring-restart: &spring-restart
+  condition: any
+  delay: 10s
+
+x-wait-for-db: &wait-for-db
+  - bash
+  - -c
+  - |
+    echo "[arranque] esperando a la base $$DB_HOST:$$DB_PORT"
+    until bash -c "</dev/tcp/$$DB_HOST/$$DB_PORT" 2>/dev/null; do sleep 2; done
+    echo "[arranque] base disponible, arranca la aplicación"
+    sleep 5
+    exec java -javaagent:/usr/local/newrelic/newrelic.jar -jar /app/app.jar
+
+x-spring-update: &spring-update
+  parallelism: 1
+  delay: 10s
+  order: start-first
+  failure_action: rollback
+  monitor: 60s
+
+services:
+  snippetsearcher-runner:
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-efca859d6310f24bdebc442287a2e92d386e17bb
+    environment:
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      JAVA_TOOL_OPTIONS: *java-opts
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: snippet-db
+      DB_HOST: runner-db
+      DB_PORT: 5432
+      BUCKET_SERVICE: asset-service
+      BUCKET_PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    entrypoint: *wait-for-db
+    healthcheck: *spring-healthcheck
+    networks:
+      default:
+      snippetsearcher-net:
+        aliases:
+          - snippetsearcher-runner
+    deploy:
+      replicas: 2
+      restart_policy: *spring-restart
+      update_config: *spring-update
+
+  runner-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: snippet-db
+    volumes:
+      - runner-pgdata:/var/lib/postgresql/data
+    # db/runner-init está vacío: las tablas del Runner las crea Hibernate
+    networks:
+      - default
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  runner-pgdata:
+    external: true
+    name: snippetsearcher_runner-pgdata
+
+networks:
+  default:
+  snippetsearcher-net:
+    external: true

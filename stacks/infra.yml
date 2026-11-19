@@ -1,0 +1,280 @@
+version: '3.8'
+
+# Stack de infraestructura compartida: Edge Gateway (Nginx + Certbot), observabilidad de logs
+# (Fluent Bit), vigía de DNS (dns-watchdog), cola/estado (Redis) y almacenamiento de snippets
+# (Asset Service + Azurite).
+#
+# Los volúmenes reutilizan los nombres históricos `snippetsearcher_*` (`external: true`) para
+# conservar los datos de la VM y permitir volver al stack único sin pérdida de datos.
+
+services:
+  # -------------------------------------------------------------
+  # Redis: Message Queue (Streams) y estado efímero multi-réplica
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7
+    volumes:
+      - redis-data:/data
+    networks:
+      snippetsearcher-net:
+        aliases:
+          - redis
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # Asset Service & Emulador Azurite
+  # Azurite queda solo en la red privada `default` de este stack.
+  # -------------------------------------------------------------
+  asset-service:
+    image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
+    environment:
+      AZURE_HOST: http://azurite
+    networks:
+      default:
+      snippetsearcher-net:
+        aliases:
+          - asset-service
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    volumes:
+      - azurite-data:/data
+    networks:
+      - default
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # -------------------------------------------------------------
+  # Reverse Proxy (Nginx como Edge Gateway)
+  # Único servicio que publica puertos (80/443) hacia afuera.
+  # -------------------------------------------------------------
+  reverse-proxy:
+    image: nginx:stable-alpine
+    ports:
+      - target: 80
+        published: 80
+        mode: ingress
+      - target: 443
+        published: 443
+        mode: ingress
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME:?DOMAIN_NAME es obligatorio (variable del environment de GitHub)}
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/templates/app.conf.template
+      - source: nginx_50x_page
+        target: /usr/share/nginx/html/errors/50x.html
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    # nginx lee el certificado solo al arrancar: cada 6 h hace `nginx -s reload` (sin cortar
+    # conexiones) para tomar el que haya renovado certbot.
+    command: >-
+      /bin/sh -c "envsubst '$$DOMAIN_NAME' < /etc/nginx/templates/app.conf.template > /etc/nginx/conf.d/app.conf || exit 1;
+      (while true; do sleep 21600; nginx -s reload; done) &
+      exec nginx -g 'daemon off;'"
+    # `labels`: Docker agrega a cada línea de log el nombre del servicio, y así nginx-logs reconoce
+    # cuáles son de nginx. max-size/max-file: el log de acceso no llena el disco.
+    logging:
+      driver: json-file
+      options:
+        labels: com.docker.swarm.service.name
+        max-size: 10m
+        max-file: "3"
+    networks:
+      snippetsearcher-net:
+        aliases:
+          - reverse-proxy
+    deploy:
+      replicas: 1
+      restart_policy:
+        # "any" y no "on-failure": al apagar la VM nginx recibe SIGQUIT y sale con 0
+        # ("Complete"); con on-failure Swarm no lo vuelve a levantar al reiniciar.
+        condition: any
+        delay: 5s
+
+  # -------------------------------------------------------------
+  # Logs de nginx a New Relic (Fluent Bit)
+  # -------------------------------------------------------------
+  nginx-logs:
+    image: fluent/fluent-bit:3.1.9
+    environment:
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      DOMAIN_NAME: ${DOMAIN_NAME}
+    configs:
+      - source: fluentbit_conf
+        target: /fluent-bit/etc/fluent-bit.conf
+      - source: fluentbit_parsers
+        target: /fluent-bit/etc/parsers-nr.conf
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - fluentbit-state:/state
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  # -------------------------------------------------------------
+  # Certbot: renueva el certificado de Let's Encrypt (modo webroot)
+  # -------------------------------------------------------------
+  certbot:
+    image: certbot/certbot:v2.11.0
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+    entrypoint: >-
+      /bin/sh -c "trap exit TERM;
+      while true; do certbot renew --webroot -w /var/www/certbot; sleep 43200 & wait $${!}; done"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 30s
+
+  # -------------------------------------------------------------
+  # Vigía del DNS interno de Swarm (multi-stack: red compartida + redes privadas)
+  # -------------------------------------------------------------
+  # Revisa cada 30 s:
+  #   1) Servicios en la red compartida `snippetsearcher-net` desde un contenedor con `getent`
+  #      conectado a esa red.
+  #   2) Servicios privados (bases de datos y azurite) desde un contenedor de su mismo stack.
+  # Si un servicio listo no resuelve 4 vueltas seguidas (2 min), lo recrea con `update --force`.
+  dns-watchdog:
+    image: docker:27-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        SHARED_PROBES="infra_redis app_snippetsearcher-app runner_snippetsearcher-runner accessmanager_snippetsearcher-accessmanager"
+        SHARED_SERVICES="infra_redis infra_asset-service infra_reverse-proxy ui_snippetsearcher-ui app_snippetsearcher-app runner_snippetsearcher-runner accessmanager_snippetsearcher-accessmanager"
+        PRIVATE_SERVICES="app_appdb runner_runner-db accessmanager_accessmanager-db infra_azurite"
+        mkdir -p /tmp/fails
+        echo "[dns-watchdog] vigilando el DNS interno de los 5 stacks"
+
+        is_ready() {
+          _svc="$$1"
+          _ready=$$(docker ps -q --filter "label=com.docker.swarm.service.name=$$_svc" --filter health=healthy)
+          [ -z "$$_ready" ] && _ready=$$(docker ps -q --filter "label=com.docker.swarm.service.name=$$_svc" --filter health=none)
+          [ -n "$$_ready" ]
+        }
+
+        record_failure() {
+          _svc="$$1"
+          _name="$${_svc#*_}"
+          _n=$$(( $$(cat "/tmp/fails/$$_svc" 2>/dev/null || echo 0) + 1 ))
+          echo "$$_n" > "/tmp/fails/$$_svc"
+          echo "[dns-watchdog] $$_svc ($$_name) corre pero no resuelve por nombre ($$_n/4)"
+          if [ "$$_n" -ge 4 ]; then
+            echo "[dns-watchdog] recreando $$_svc (docker service update --force)"
+            docker service update --force --detach "$$_svc" >/dev/null
+            rm -f "/tmp/fails/$$_svc"
+          fi
+        }
+
+        while true; do
+          sleep 30
+
+          # 1) Servicios en la red compartida snippetsearcher-net
+          probe=""
+          probe_candidates=""
+          for psvc in $$SHARED_PROBES; do
+            probe_candidates="$$probe_candidates $$(docker ps -q --filter "label=com.docker.swarm.service.name=$$psvc")"
+          done
+          for c in $$(printf '%s\n' $$probe_candidates | grep -v '^$$' | shuf); do
+            if docker exec "$$c" getent hosts localhost >/dev/null 2>&1; then probe=$$c; break; fi
+          done
+
+          if [ -n "$$probe" ]; then
+            checked=0; broken=""
+            for svc in $$SHARED_SERVICES; do
+              is_ready "$$svc" || continue
+              checked=$$((checked + 1))
+              name="$${svc#*_}"
+              if docker exec "$$probe" getent hosts "$$name" >/dev/null 2>&1; then
+                rm -f "/tmp/fails/$$svc"
+              else
+                broken="$$broken $$svc"
+              fi
+            done
+            if [ "$$checked" -gt 1 ] && [ "$$(echo $$broken | wc -w)" -eq "$$checked" ]; then
+              echo "[dns-watchdog] ningún servicio compartido resuelve desde $$probe: se prueba desde otro contenedor"
+            else
+              for svc in $$broken; do
+                record_failure "$$svc"
+              done
+            fi
+          fi
+
+          # 2) Servicios privados (DBs y Azurite) probados desde su propio stack
+          for svc in $$PRIVATE_SERVICES; do
+            is_ready "$$svc" || continue
+            stack="$${svc%%_*}"
+            name="$${svc#*_}"
+            sprobe=""
+            for c in $$(docker ps -q --filter "label=com.docker.stack.namespace=$$stack" | shuf); do
+              if docker exec "$$c" getent hosts localhost >/dev/null 2>&1; then sprobe=$$c; break; fi
+            done
+            [ -z "$$sprobe" ] && continue
+            if docker exec "$$sprobe" getent hosts "$$name" >/dev/null 2>&1; then
+              rm -f "/tmp/fails/$$svc"
+            else
+              record_failure "$$svc"
+            fi
+          done
+        done
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  redis-data:
+    external: true
+    name: snippetsearcher_redis-data
+  azurite-data:
+    external: true
+    name: snippetsearcher_azurite-data
+  fluentbit-state:
+    external: true
+    name: snippetsearcher_fluentbit-state
+
+configs:
+  nginx_conf:
+    name: nginx_conf_${NGINX_CONF_HASH:-local}
+    file: ../reverse-proxy/nginx/conf.d/app.conf
+  nginx_50x_page:
+    name: nginx_50x_${NGINX_50X_HASH:-local}
+    file: ../reverse-proxy/nginx/errors/50x.html
+  fluentbit_conf:
+    name: fluentbit_conf_${FLUENTBIT_CONF_HASH:-local}
+    file: ../reverse-proxy/fluent-bit/fluent-bit.conf
+  fluentbit_parsers:
+    name: fluentbit_parsers_${FLUENTBIT_PARSERS_HASH:-local}
+    file: ../reverse-proxy/fluent-bit/parsers.conf
+
+networks:
+  default:
+  snippetsearcher-net:
+    external: true
