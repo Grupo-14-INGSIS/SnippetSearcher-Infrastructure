@@ -34,7 +34,7 @@ x-spring-update: &spring-update
 
 services:
   snippetsearcher-runner:
-    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-efca859d6310f24bdebc442287a2e92d386e17bb
+    image: ghcr.io/grupo-14-ingsis/snippetsearcher-runner:develop-081f3e2fb2b34f4d895de598419583443428390e
     environment:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME_RUNNER:-RunnerIngsis_dev}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
