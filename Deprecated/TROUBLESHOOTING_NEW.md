@@ -164,7 +164,7 @@ Este documento centraliza los problemas comunes, causas raíces y procedimientos
 * **Síntoma:** En Deploy Stack, el paso `Force redeploy of the microservices` queda `skipped`.
 * **Diagnóstico:** Abrir `Decide whether to force a redeploy` y leer `Forzar reinicio de los microservicios: true` o `false`.
 * **Causas posibles:** El push tocó solo archivos `.md`, el run fue un *Run workflow*, el autor del commit es `github-actions[bot]`, o el run en espera fue reemplazado por otro push.
-* **Solución:** Hacer otro commit humano que toque algo más que `.md`. Las reglas están en [Pipeline CI/CD](Documentación/PIPELINE_CI_CD.md).
+* **Solución:** Hacer otro commit humano que toque algo más que `.md`. Las reglas están en [Pipeline CI/CD](../Documentación/PIPELINE_CI_CD.md).
 
 ---
 

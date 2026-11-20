@@ -1,48 +1,32 @@
 #!/usr/bin/env bash
-# Ciclo de vida del stack de Swarm al apagar y prender la VM (lo corre systemd, ver
-# snippetsearcher-lifecycle.service).
-#
-#   stop  -> al apagar, ANTES de que se detenga Docker: guarda las réplicas de cada servicio y los
-#            baja en orden (aplicación primero, después bases), esperando a que Swarm termine de
-#            limpiar. Sin esto, Docker se apagaba con limpiezas de Swarm a medio hacer ("remove task
-#            failed ... context canceled") y al prender algunos servicios quedaban sin nombre en el
-#            DNS interno (UnknownHostException).
-#   start -> al prender: restaura las réplicas y revisa que cada servicio que está corriendo resuelva
-#            por nombre; a los que no, les hace `docker service update --force` (los vuelve a registrar).
-#
-# No necesita ningún archivo del proyecto: trabaja sobre los servicios que ya tiene Swarm. El estado
-# (réplicas guardadas) va a /var/lib/snippetsearcher, no al home.
-#
-# Uso manual:  sudo snippetsearcher-lifecycle.sh stop|start|check
 set -uo pipefail
 
-STACK="snippetsearcher"
 STATE_DIR="/var/lib/snippetsearcher"
 STATE_FILE="$STATE_DIR/replicas"
+STACKS="infra accessmanager runner app ui"
 # Orden de apagado: lo que depende de otros primero, las bases y el almacenamiento al final
-APP_SERVICES="certbot reverse-proxy snippetsearcher-ui snippetsearcher-app snippetsearcher-runner snippetsearcher-accessmanager"
-INFRA_SERVICES="asset-service azurite redis appdb runner-db accessmanager-db"
-
+APP_SERVICES="infra_certbot infra_reverse-proxy ui_snippetsearcher-ui
+  app_snippetsearcher-app runner_snippetsearcher-runner accessmanager_snippetsearcher-accessmanager"
+INFRA_SERVICES="infra_asset-service infra_azurite infra_redis app_appdb runner_runner-db accessmanager_accessmanager-db"
 log() { echo "[snippetsearcher-lifecycle] $*"; }
 
 swarm_active() { [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = "active" ]; }
 
-service_exists() { docker service inspect "${STACK}_$1" >/dev/null 2>&1; }
+service_exists() { docker service inspect "$1" >/dev/null 2>&1; }
 
-running_containers() {
-    # Contenedores corriendo de un servicio (o de todo el stack si no se pasa servicio)
-    if [ $# -eq 0 ]; then
-        docker ps -q --filter "label=com.docker.stack.namespace=$STACK"
-    else
-        docker ps -q --filter "label=com.docker.swarm.service.name=${STACK}_$1"
-    fi
+running_containers() { docker ps -q --filter "label=com.docker.swarm.service.name=$1"; }
+
+# Todos los servicios de los 5 stacks (nombre completo)
+all_services() {
+    local s
+    for s in $STACKS; do docker stack services "$s" --format '{{.Name}}' 2>/dev/null; done
 }
 
 scale_down() {
     local group="$1" svc
     for svc in $group; do
         service_exists "$svc" || continue
-        docker service scale -d "${STACK}_${svc}=0" >/dev/null && log "bajando $svc"
+        docker service scale -d "${svc}=0" >/dev/null && log "bajando $svc"
     done
     # Esperar a que se detengan sus contenedores (máximo 2 minutos por grupo)
     local deadline=$((SECONDS + 120)) left
@@ -65,17 +49,16 @@ cmd_stop() {
     tmp="$(mktemp)"
     for svc in $APP_SERVICES $INFRA_SERVICES; do
         service_exists "$svc" || continue
-        n="$(docker service inspect "${STACK}_${svc}" --format '{{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{end}}')"
+        n="$(docker service inspect "$svc" --format '{{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{end}}')"
         [ -n "$n" ] && [ "$n" -gt 0 ] && echo "$svc $n" >> "$tmp"
     done
     if [ -s "$tmp" ]; then mv "$tmp" "$STATE_FILE"; log "réplicas guardadas: $(tr '\n' ' ' < "$STATE_FILE")"; else rm -f "$tmp"; fi
 
     scale_down "$APP_SERVICES"
     scale_down "$INFRA_SERVICES"
-    # Margen para que Swarm termine de borrar tareas y desarmar endpoints de red antes de que
-    # systemd detenga Docker
+    # Margen para que Swarm termine de borrar tareas y desarmar endpoints de red
     sleep 15
-    log "stack detenido en orden"
+    log "stacks detenidos en orden"
 }
 
 wait_for_swarm() {
@@ -88,38 +71,38 @@ wait_for_swarm() {
 
 restore_replicas() {
     [ -s "$STATE_FILE" ] || { log "sin réplicas guardadas (apagado sin el script): se dejan como están"; return 0; }
-    local svc n
+    local svc n group
     # Primero bases y almacenamiento, después la aplicación
     for group in "$INFRA_SERVICES" "$APP_SERVICES"; do
         for svc in $group; do
             n="$(awk -v s="$svc" '$1 == s { print $2 }' "$STATE_FILE")"
-            [ -n "$n" ] && service_exists "$svc" && docker service scale -d "${STACK}_${svc}=$n" >/dev/null && log "subiendo $svc a $n"
+            [ -n "$n" ] && service_exists "$svc" && docker service scale -d "${svc}=$n" >/dev/null && log "subiendo $svc a $n"
         done
         sleep 20
     done
     rm -f "$STATE_FILE"
 }
 
-# Un contenedor corriendo del stack que tenga `getent` (las imágenes Debian/Ubuntu: postgres, redis,
-# las de Java). Desde ahí se prueba si cada servicio resuelve en el DNS interno de Swarm.
-probe_container() {
+# Una réplica lista del servicio: healthy, o sin healthcheck. Las de Java en "health: starting" todavía
+# no están en el DNS de Swarm, así que no se miran (se verán en la próxima vuelta).
+ready_container() {
     local c
-    for c in $(running_containers); do
-        docker exec "$c" getent hosts localhost >/dev/null 2>&1 && { echo "$c"; return 0; }
-    done
-    return 1
+    c="$(docker ps -q --filter "label=com.docker.swarm.service.name=$1" --filter health=healthy | head -n 1)"
+    [ -z "$c" ] && c="$(docker ps -q --filter "label=com.docker.swarm.service.name=$1" --filter health=none | head -n 1)"
+    echo "$c"
 }
 
-# Repara los servicios que están corriendo pero no resuelven. Un servicio sin tareas corriendo
-# todavía no tiene registro (es normal mientras arranca): ese se mira en la próxima vuelta.
+# Repara los servicios que están corriendo pero no resuelven. Se prueba desde la propia réplica: es el
+# único contenedor que seguro comparte red con el servicio (las bases solo están en la red de su stack).
 check_dns_once() {
-    local probe svc name broken=0
-    probe="$(probe_container)" || { log "todavía no hay un contenedor para probar el DNS"; return 1; }
-    for svc in $(docker stack services "$STACK" --format '{{.Name}}'); do
-        name="${svc#"${STACK}"_}"
-        [ -z "$(running_containers "$name")" ] && continue
-        if ! docker exec "$probe" getent hosts "$name" >/dev/null 2>&1; then
-            log "$name corre pero no resuelve en el DNS: docker service update --force"
+    local svc c name broken=0
+    for svc in $(all_services); do
+        c="$(ready_container "$svc")"
+        [ -z "$c" ] && continue
+        docker exec "$c" getent hosts localhost >/dev/null 2>&1 || continue   # imagen sin getent
+        name="${svc#*_}"
+        if ! docker exec "$c" getent hosts "$name" >/dev/null 2>&1; then
+            log "$svc corre pero no resuelve en el DNS: docker service update --force"
             docker service update --force -d "$svc" >/dev/null
             broken=$((broken + 1))
         fi
@@ -127,16 +110,25 @@ check_dns_once() {
     return "$broken"
 }
 
+pending_services() {
+    local s
+    for s in $STACKS; do docker stack services "$s" --format '{{.Replicas}}' 2>/dev/null; done \
+        | awk -F/ '$1 != $2' | wc -l
+}
+
 cmd_check() {
     # Revisa durante hasta 20 minutos (las JVM tardan en arrancar en 2 CPUs): termina cuando una
     # vuelta completa no encuentra nada roto y todos los servicios tienen sus réplicas.
-    local deadline=$((SECONDS + 1200)) pending
+    local deadline=$((SECONDS + 1200)) s
     while :; do
         if check_dns_once; then
-            pending="$(docker stack services "$STACK" --format '{{.Replicas}}' | awk -F/ '$1 != $2' | wc -l)"
-            [ "$pending" -eq 0 ] && { log "todos los servicios corren y resuelven"; return 0; }
+            [ "$(pending_services)" -eq 0 ] && { log "todos los servicios corren y resuelven"; return 0; }
         fi
-        [ $SECONDS -ge $deadline ] && { log "fin de la revisión: quedan servicios sin terminar de arrancar"; docker stack services "$STACK" --format '{{.Name}} {{.Replicas}}'; return 0; }
+        if [ $SECONDS -ge $deadline ]; then
+            log "fin de la revisión: quedan servicios sin terminar de arrancar"
+            for s in $STACKS; do docker stack services "$s" --format '{{.Name}} {{.Replicas}}' 2>/dev/null; done
+            return 0
+        fi
         sleep 60
     done
 }
@@ -146,7 +138,6 @@ cmd_start() {
     restore_replicas
     cmd_check
 }
-
 case "${1:-}" in
     stop) cmd_stop ;;
     start) cmd_start ;;

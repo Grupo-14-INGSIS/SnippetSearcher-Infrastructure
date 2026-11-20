@@ -1,5 +1,4 @@
 name: Deploy stack
-#workflow reutilizable
 on:
   workflow_call:
     inputs:
@@ -9,6 +8,7 @@ on:
       repo: { type: string, default: '' }          # repo del docker-stack.yml (vacío: el que llama)
       ref: { type: string, default: '' }           # rama de ese repo (vacío: la del run)
       nr_app: { type: string, default: '' }        # nombre en New Relic (solo App, Runner y AccessManager)
+
 jobs:
   deploy:
     name: ${{ inputs.stack }} (${{ inputs.ambiente }})
@@ -22,8 +22,7 @@ jobs:
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.ref }}
-      # Las variables que `docker stack deploy` reemplaza en docker-stack.yml. CONFIG_HASH solo existe
-      # en infra: cambia cuando cambia algo de reverse-proxy/ y, si no, nginx no se reinicia.
+
       - name: Variables del stack
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
@@ -40,7 +39,8 @@ jobs:
           if [ -d reverse-proxy ]; then
             echo "CONFIG_HASH=$(find reverse-proxy -type f | sort | xargs cat | sha256sum | cut -c1-12)" >> stack.env
           fi
-      # detach: false -> espera a que el update termine; si Swarm hace rollback, el job queda en rojo
+          echo "INICIO=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
+      # detach: false -> espera a que Swarm termine (también si vuelve a la versión anterior)
       - uses: cssnr/stack-deploy-action@v1
         with:
           name: ${{ inputs.stack }}
@@ -54,21 +54,38 @@ jobs:
           registry_host: ghcr.io
           registry_user: ${{ github.repository_owner }}
           registry_pass: ${{ secrets.PAT }}
-      # Limpieza: borra lo que ESTE stack ya no usa (configs de versiones anteriores e imágenes viejas de
-      # sus servicios). Solo toca su stack, así no rompe el deploy de otro repo que esté en curso. Lo que
-      # está en uso no se puede borrar: esos comandos fallan y se siguen de largo.
+
       - uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets[format('{0}_SSH_KEY', inputs.ambiente)] }}
-      - name: Limpieza
-        continue-on-error: true   # el deploy ya se hizo: si esto falla, no lo pone en rojo
+      - name: Conexión a la VM
         env:
           SSH_HOST: ${{ secrets[format('{0}_SSH_HOST', inputs.ambiente)] }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          STACK: ${{ inputs.stack }}
         run: |
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
-          export DOCKER_HOST="ssh://$SSH_USER@$SSH_HOST"
+          echo "DOCKER_HOST=ssh://$SSH_USER@$SSH_HOST" >> "$GITHUB_ENV"
+
+      - name: Verificar que no volvió a la versión anterior
+        env:
+          STACK: ${{ inputs.stack }}
+        run: |
+          fallo=0
+          for svc in $(docker stack services "$STACK" --format '{{.Name}}'); do
+            read -r estado inicio <<< "$(docker service inspect "$svc" \
+              --format '{{if .UpdateStatus}}{{.UpdateStatus.State}} {{.UpdateStatus.StartedAt.Format "2006-01-02T15:04:05"}}{{end}}')"
+            if [[ ( "$estado" == rollback_* || "$estado" == paused ) && "$inicio" > "$INICIO" ]]; then
+              echo "::error::$svc no se actualizó ($estado). Tareas recientes:"
+              docker service ps "$svc" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -4
+              fallo=1
+            fi
+          done
+          exit "$fallo"
+      - name: Limpieza
+        continue-on-error: true   # el deploy ya se hizo: si esto falla, no lo pone en rojo
+        env:
+          STACK: ${{ inputs.stack }}
+        run: |
           docker config ls -q --filter "label=com.docker.stack.namespace=$STACK" | xargs -r docker config rm 2>/dev/null || true
           for img in $(docker stack services "$STACK" --format '{{.Image}}' | sed 's/[:@].*//' | sort -u); do
             docker image ls -q "$img" | sort -u | xargs -r docker rmi 2>/dev/null || true
