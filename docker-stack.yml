@@ -27,6 +27,7 @@ services:
     # "any": al apagar la VM nginx sale con 0 y con on-failure Swarm no lo volvía a levantar
     deploy:
       restart_policy: { condition: any, delay: 5s }
+      update_config: { failure_action: rollback }
 
   # Cola de mensajes (Redis Streams) de App y Runner
   redis:
@@ -34,6 +35,8 @@ services:
     volumes:
       - redis-data:/data
     networks: [snippetsearcher-net]
+    deploy:
+      update_config: { failure_action: rollback }
 
   # Lo usa el Runner (por snippetsearcher-net); habla con azurite por la red interna de infra
   asset-service:
@@ -41,11 +44,15 @@ services:
     environment:
       AZURE_HOST: http://azurite
     networks: [default, snippetsearcher-net]
+    deploy:
+      update_config: { failure_action: rollback }
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
     volumes:
       - azurite-data:/data
+    deploy:
+      update_config: { failure_action: rollback }
 
   # Logs de nginx a New Relic (Fluent Bit)
   nginx-logs:
@@ -61,6 +68,7 @@ services:
       - fluentbit-state:/state
     deploy:
       resources: { limits: { memory: 64M } }
+      update_config: { failure_action: rollback }
 
   # Renueva el certificado de Let's Encrypt cada 12 h (solo si faltan menos de 30 días)
   certbot:
@@ -71,6 +79,8 @@ services:
     entrypoint: >
       /bin/sh -c "trap exit TERM;
       while true; do certbot renew --webroot -w /var/www/certbot; sleep 43200 & wait $${!}; done"
+    deploy:
+      update_config: { failure_action: rollback }
 
   # Vigía del DNS interno de Swarm. Después de un apagado de golpe, a veces un servicio queda corriendo
   # pero SIN nombre en el DNS; se repara recreando su tarea (`docker service update --force`).
@@ -119,6 +129,7 @@ services:
       restart_policy:
         condition: any
         delay: 10s
+      update_config: { failure_action: rollback }
       resources:
         limits:
           memory: 64M
