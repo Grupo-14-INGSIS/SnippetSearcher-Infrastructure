@@ -1,0 +1,75 @@
+name: Deploy stack
+#workflow reutilizable
+on:
+  workflow_call:
+    inputs:
+      stack: { type: string, required: true }      # infra, app, runner, accessmanager, ui
+      ambiente: { type: string, required: true }   # DEV o PROD: elige VM y secretos
+      image_tag: { type: string, default: '' }     # develop-<sha>... Vacío con ref: <ref>-<sha del commit>
+      repo: { type: string, default: '' }          # repo del docker-stack.yml (vacío: el que llama)
+      ref: { type: string, default: '' }           # rama de ese repo (vacío: la del run)
+      nr_app: { type: string, default: '' }        # nombre en New Relic (solo App, Runner y AccessManager)
+jobs:
+  deploy:
+    name: ${{ inputs.stack }} (${{ inputs.ambiente }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # start_period de los Spring es 900 s y el update va de a una réplica
+    concurrency:
+      group: ${{ inputs.stack }}-${{ inputs.ambiente }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+      # Las variables que `docker stack deploy` reemplaza en docker-stack.yml. CONFIG_HASH solo existe
+      # en infra: cambia cuando cambia algo de reverse-proxy/ y, si no, nginx no se reinicia.
+      - name: Variables del stack
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          REF: ${{ inputs.ref }}
+          NEW_RELIC_APP_NAME: ${{ inputs.nr_app }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          DOMAIN_NAME: ${{ vars[format('{0}_DOMAIN', inputs.ambiente)] }}
+        run: |
+          # Sin image_tag (deploy.yml de Infra): la imagen del último commit de la rama, la misma que ya
+          # desplegó el CI de ese servicio. Así Swarm ve la misma especificación y no reinicia nada.
+          [ -n "$IMAGE_TAG" ] || [ -z "$REF" ] || IMAGE_TAG="$REF-$(git rev-parse HEAD)"
+          printf '%s\n' "IMAGE_TAG=$IMAGE_TAG" "NEW_RELIC_APP_NAME=$NEW_RELIC_APP_NAME" \
+            "NEW_RELIC_LICENSE_KEY=$NEW_RELIC_LICENSE_KEY" "DOMAIN_NAME=$DOMAIN_NAME" > stack.env
+          if [ -d reverse-proxy ]; then
+            echo "CONFIG_HASH=$(find reverse-proxy -type f | sort | xargs cat | sha256sum | cut -c1-12)" >> stack.env
+          fi
+      # detach: false -> espera a que el update termine; si Swarm hace rollback, el job queda en rojo
+      - uses: cssnr/stack-deploy-action@v1
+        with:
+          name: ${{ inputs.stack }}
+          file: docker-stack.yml
+          host: ${{ secrets[format('{0}_SSH_HOST', inputs.ambiente)] }}
+          user: ${{ secrets.SSH_USER }}
+          ssh_key: ${{ secrets[format('{0}_SSH_KEY', inputs.ambiente)] }}
+          env_file: stack.env
+          detach: false
+          registry_auth: true
+          registry_host: ghcr.io
+          registry_user: ${{ github.repository_owner }}
+          registry_pass: ${{ secrets.PAT }}
+      # Limpieza: borra lo que ESTE stack ya no usa (configs de versiones anteriores e imágenes viejas de
+      # sus servicios). Solo toca su stack, así no rompe el deploy de otro repo que esté en curso. Lo que
+      # está en uso no se puede borrar: esos comandos fallan y se siguen de largo.
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets[format('{0}_SSH_KEY', inputs.ambiente)] }}
+      - name: Limpieza
+        continue-on-error: true   # el deploy ya se hizo: si esto falla, no lo pone en rojo
+        env:
+          SSH_HOST: ${{ secrets[format('{0}_SSH_HOST', inputs.ambiente)] }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          STACK: ${{ inputs.stack }}
+        run: |
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          export DOCKER_HOST="ssh://$SSH_USER@$SSH_HOST"
+          docker config ls -q --filter "label=com.docker.stack.namespace=$STACK" | xargs -r docker config rm 2>/dev/null || true
+          for img in $(docker stack services "$STACK" --format '{{.Image}}' | sed 's/[:@].*//' | sort -u); do
+            docker image ls -q "$img" | sort -u | xargs -r docker rmi 2>/dev/null || true
+          done
