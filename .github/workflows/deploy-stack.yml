@@ -74,8 +74,8 @@ jobs:
           for svc in $(docker stack services "$STACK" --format '{{.Name}}'); do
             read -r estado inicio <<< "$(docker service inspect "$svc" \
               --format '{{if .UpdateStatus}}{{.UpdateStatus.State}} {{.UpdateStatus.StartedAt.Format "2006-01-02T15:04:05"}}{{end}}')"
-            if [[ "$estado" == rollback_* && "$inicio" > "$INICIO" ]]; then
-              echo "::error::$svc no se actualizó: Swarm volvió a la versión anterior. Tareas recientes:"
+            if [[ ( "$estado" == rollback_* || "$estado" == paused ) && "$inicio" > "$INICIO" ]]; then
+              echo "::error::$svc no se actualizó ($estado). Tareas recientes:"
               docker service ps "$svc" --no-trunc --format '{{.Image}} | {{.CurrentState}} | {{.Error}}' | head -4
               fallo=1
             fi
