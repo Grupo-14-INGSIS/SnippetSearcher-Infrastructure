@@ -66,6 +66,49 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
           echo "DOCKER_HOST=ssh://$SSH_USER@$SSH_HOST" >> "$GITHUB_ENV"
 
+      # Métricas de la VM y de sus contenedores en New Relic. Es el único contenedor fuera de Swarm: necesita
+      # --privileged, --pid=host y --cgroupns=host, que un servicio de Swarm no admite (sin --cgroupns=host
+      # el agente no encuentra los cgroups y manda la CPU y la memoria de cada contenedor en 0).
+      # Solo se recrea si cambió la imagen o la configuración (etiqueta config-hash).
+      - name: Agente de infraestructura de New Relic
+        if: inputs.stack == 'infra'
+        env:
+          NRIA_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          DOMAIN_NAME: ${{ vars[format('{0}_DOMAIN', inputs.ambiente)] }}
+          NR_ENVIRONMENT: ${{ inputs.ambiente == 'PROD' && 'production' || 'develop' }}
+          NR_IMAGE: newrelic/infrastructure:2.0.1
+        run: |
+          set -euo pipefail
+          if [ -z "$NRIA_LICENSE_KEY" ]; then
+            echo "::warning::Falta NEW_RELIC_LICENSE_KEY: no se despliega el agente de infraestructura"
+            exit 0
+          fi
+          export NRIA_DISPLAY_NAME="${DOMAIN_NAME%%.*}"
+          export NRIA_CUSTOM_ATTRIBUTES="{\"environment\":\"$NR_ENVIRONMENT\"}"
+          config="$(printf '%s' "$NR_IMAGE|$NRIA_LICENSE_KEY|$NRIA_DISPLAY_NAME|$NRIA_CUSTOM_ATTRIBUTES" | sha256sum | cut -c1-12)"
+          current="$(docker inspect newrelic-infra --format '{{.State.Running}} {{index .Config.Labels "config-hash"}}' 2>/dev/null || true)"
+          if [ "$current" = "true $config" ]; then
+            echo "El agente ya corre con esta configuración"
+            exit 0
+          fi
+          docker rm -f newrelic-infra >/dev/null 2>&1 || true
+          # -e sin valor: Docker toma la clave del entorno del runner y no queda en la línea de comandos
+          docker run -d \
+            --name newrelic-infra \
+            --restart unless-stopped \
+            --label "config-hash=$config" \
+            --network=host \
+            --cap-add=SYS_PTRACE \
+            --privileged \
+            --pid=host \
+            --cgroupns=host \
+            -v "/:/host:ro" \
+            -v "/var/run/docker.sock:/var/run/docker.sock" \
+            -e NRIA_LICENSE_KEY \
+            -e NRIA_DISPLAY_NAME \
+            -e NRIA_CUSTOM_ATTRIBUTES \
+            "$NR_IMAGE"
+
       - name: Verificar que no volvió a la versión anterior
         env:
           STACK: ${{ inputs.stack }}
