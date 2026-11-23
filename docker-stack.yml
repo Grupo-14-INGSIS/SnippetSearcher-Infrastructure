@@ -143,7 +143,9 @@ services:
     cap_add: [SYS_PTRACE]
     environment:
       NRIA_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
-      NRIA_DISPLAY_NAME: ${DOMAIN_NAME}
+      # Mismo nombre y atributo que el agente anterior: los dashboards y alertas filtran por environment
+      NRIA_DISPLAY_NAME: ${NR_HOST}
+      NRIA_CUSTOM_ATTRIBUTES: '{"environment":"${NR_ENVIRONMENT}"}'
     volumes:
       - /:/host:ro
       - /var/run/docker.sock:/var/run/docker.sock

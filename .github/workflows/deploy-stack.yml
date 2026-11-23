@@ -30,12 +30,14 @@ jobs:
           NEW_RELIC_APP_NAME: ${{ inputs.nr_app }}
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           DOMAIN_NAME: ${{ vars[format('{0}_DOMAIN', inputs.ambiente)] }}
+          NR_ENVIRONMENT: ${{ inputs.ambiente == 'PROD' && 'production' || 'develop' }}
         run: |
           # Sin image_tag (deploy.yml de Infra): la imagen del último commit de la rama, la misma que ya
           # desplegó el CI de ese servicio. Así Swarm ve la misma especificación y no reinicia nada.
           [ -n "$IMAGE_TAG" ] || [ -z "$REF" ] || IMAGE_TAG="$REF-$(git rev-parse HEAD)"
           printf '%s\n' "IMAGE_TAG=$IMAGE_TAG" "NEW_RELIC_APP_NAME=$NEW_RELIC_APP_NAME" \
-            "NEW_RELIC_LICENSE_KEY=$NEW_RELIC_LICENSE_KEY" "DOMAIN_NAME=$DOMAIN_NAME" > stack.env
+            "NEW_RELIC_LICENSE_KEY=$NEW_RELIC_LICENSE_KEY" "DOMAIN_NAME=$DOMAIN_NAME" \
+            "NR_ENVIRONMENT=$NR_ENVIRONMENT" "NR_HOST=${DOMAIN_NAME%%.*}" > stack.env
           if [ -d reverse-proxy ]; then
             echo "CONFIG_HASH=$(find reverse-proxy -type f | sort | xargs cat | sha256sum | cut -c1-12)" >> stack.env
           fi
