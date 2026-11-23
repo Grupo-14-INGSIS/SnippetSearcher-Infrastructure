@@ -99,6 +99,8 @@ services:
           sleep 30
           for svc in $$(docker service ls --format '{{.Name}}'); do
             [ "$$svc" = "$$SELF" ] && continue
+            # Está en la red host, no en la de Swarm: nunca resuelve por nombre y se lo recrearía sin fin
+            [ "$$svc" = "infra_newrelic-infra" ] && continue
             # Solo réplicas listas: healthy, o sin healthcheck (bases, redis...). Una de Java en
             # "health: starting" todavía no está en el DNS: si se la contara, se recrearía en pleno arranque.
             c=$$(docker ps -q --filter label=com.docker.swarm.service.name=$$svc --filter health=healthy | head -n 1)
@@ -133,9 +135,29 @@ services:
       resources:
         limits:
           memory: 64M
+
+  # Métricas de la VM (CPU, RAM, disco, red, contenedores) en New Relic. Uno por nodo (global).
+  # Swarm no aplica --privileged ni --pid=host: el agente lee la VM por /host.
+  newrelic-infra:
+    image: newrelic/infrastructure:2.0.1
+    cap_add: [SYS_PTRACE]
+    environment:
+      NRIA_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      NRIA_DISPLAY_NAME: ${DOMAIN_NAME}
+    volumes:
+      - /:/host:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [hostnet]
+    deploy:
+      mode: global
+      resources: { limits: { memory: 128M } }
+      update_config: { failure_action: rollback }
+
 # Red compartida entre stacks. `name` fijo: sin él se llamaría infra_snippetsearcher-net.
+# hostnet: la red de la VM (la de newrelic-infra).
 networks:
   snippetsearcher-net: { name: snippetsearcher-net, driver: overlay, attachable: true }
+  hostnet: { external: true, name: host }
 
 # `name` fijo = los volúmenes que ya existen del stack único. Sin `name` serían infra_redis-data, etc.: VACÍOS.
 # fluentbit-state guarda hasta dónde leyó Fluent Bit: uno nuevo reenviaría todos los logs viejos.
