@@ -18,6 +18,7 @@ jobs:
     with:
       stack: infra
       ambiente: ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
+      nr_app: ${{ github.ref_name == 'main' && 'AssetServiceIngsis' || 'AssetServiceIngsis_dev' }}
     secrets: inherit
   servicios:
     needs: infra
