@@ -40,11 +40,36 @@ services:
 
   # Lo usa el Runner (por snippetsearcher-net); habla con azurite por la red interna de infra
   asset-service:
-    image: ghcr.io/austral-ingsis/snippet-asset-service:main.14
+    image: ghcr.io/austral-ingsis/snippet-asset-service:main.18
     environment:
       AZURE_HOST: http://azurite
+      # Agente de New Relic (desde main.18 se configura por variables de entorno)
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME}
+      # Por defecto es BODY_AND_HEADERS: loguearia el contenido entero de cada archivo
+      AZURE_HTTP_LOG_LEVEL: BASIC
     networks: [default, snippetsearcher-net]
     deploy:
+      update_config: { failure_action: rollback }
+
+  # Synthetic check: un usuario falso de Locust que prueba el asset-service todo el tiempo
+  # (crear, actualizar, leer, borrar y los 404). Corre adentro de la red porque el
+  # asset-service no es accesible desde afuera. Sin -t, corre para siempre.
+  asset-synthetic:
+    image: locustio/locust:2.47.0
+    command: -f /home/locust/locustfile.py --headless -u 1 -r 1 --host http://asset-service:8080
+    environment:
+      PAYLOAD_KB: "1"
+      WAIT_MIN: "30"
+      WAIT_MAX: "60"
+    configs:
+      - { source: asset_synthetic, target: /home/locust/locustfile.py }
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+    deploy:
+      replicas: 1
+      resources: { limits: { memory: 128M } }
       update_config: { failure_action: rollback }
 
   azurite:
@@ -150,3 +175,4 @@ configs:
   nginx_50x_page: { name: "nginx_50x_${CONFIG_HASH:-local}", file: ./reverse-proxy/nginx/errors/50x.html }
   fluentbit_conf: { name: "fluentbit_conf_${CONFIG_HASH:-local}", file: ./reverse-proxy/fluent-bit/fluent-bit.conf }
   fluentbit_parsers: { name: "fluentbit_parsers_${CONFIG_HASH:-local}", file: ./reverse-proxy/fluent-bit/parsers.conf }
+  asset_synthetic: { name: asset_synthetic_v1, file: ./load-tests/locustfile.py }
